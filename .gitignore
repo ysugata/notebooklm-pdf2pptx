@@ -1,0 +1,11 @@
+.venv/
+.venv-iopaint/
+__pycache__/
+*.pyc
+run/
+slides/
+work/
+output*.pptx
+.DS_Store
+text_layout.generated.json
+fonts/

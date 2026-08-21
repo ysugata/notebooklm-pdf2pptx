@@ -1,0 +1,597 @@
+<title>notebooklm-pdf2pptx のしくみ</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@600;700&family=Noto+Sans+JP:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+  /* ---- トークン: ダークファースト (題材=金色×ダークのスライド変換) ---- */
+  :root {
+    --bg: #14120d;
+    --surface: #1e1a12;
+    --surface2: #262115;
+    --ink: #ede6d6;
+    --muted: #a89e88;
+    --gold: #e4c67b;         /* 変換対象デッキの実測色 [228,198,123] */
+    --gold-deep: #b8933f;
+    --measure: #7fbfcf;      /* 計測・注記のシアン */
+    --line: #3a3426;
+    --ok: #8fbf7f;
+    --ml: #c98bd6;           /* 機械学習コンポーネントの識別色 */
+    --code-bg: #0f0d09;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #faf7ef;
+      --surface: #ffffff;
+      --surface2: #f3edda;
+      --ink: #292416;
+      --muted: #6e6753;
+      --gold: #8f6d1e;
+      --gold-deep: #6e5316;
+      --measure: #23788f;
+      --line: #e2dac4;
+      --ok: #4a7c3f;
+      --ml: #8e44a8;
+      --code-bg: #f0ead6;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #faf7ef;
+    --surface: #ffffff;
+    --surface2: #f3edda;
+    --ink: #292416;
+    --muted: #6e6753;
+    --gold: #8f6d1e;
+    --gold-deep: #6e5316;
+    --measure: #23788f;
+    --line: #e2dac4;
+    --ok: #4a7c3f;
+    --ml: #8e44a8;
+    --code-bg: #f0ead6;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Noto Sans JP", "Hiragino Sans", sans-serif;
+    font-size: 16px;
+    line-height: 1.85;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 0 24px; }
+
+  h1, h2, h3 { font-family: "Shippori Mincho", "Noto Sans JP", serif; text-wrap: balance; line-height: 1.35; }
+  h1 { font-size: clamp(1.9rem, 5vw, 3rem); font-weight: 700; margin: 0.2em 0; }
+  h2 { font-size: clamp(1.4rem, 3.4vw, 1.9rem); font-weight: 700; margin: 0 0 0.6em; }
+  h3 { font-size: 1.12rem; font-weight: 600; margin: 1.6em 0 0.5em; color: var(--gold); }
+  p { margin: 0.7em 0; }
+  code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.88em; }
+  code { background: var(--code-bg); border: 1px solid var(--line); border-radius: 4px; padding: 0.08em 0.4em; }
+  a { color: var(--measure); }
+
+  /* ---- ヒーロー ---- */
+  header.hero { padding: 64px 0 28px; border-bottom: 1px solid var(--line); }
+  .eyebrow { font-family: "IBM Plex Mono", monospace; font-size: 0.78rem; letter-spacing: 0.18em; color: var(--gold); text-transform: uppercase; }
+  .lede { font-size: 1.05rem; color: var(--muted); max-width: 42em; }
+  .hero-stats { display: flex; flex-wrap: wrap; gap: 12px 32px; margin-top: 20px; }
+  .stat { font-family: "IBM Plex Mono", monospace; font-size: 0.82rem; color: var(--muted); }
+  .stat b { color: var(--ink); font-size: 1.1rem; font-weight: 600; display: block; font-variant-numeric: tabular-nums; }
+
+  /* ---- セクション ---- */
+  section { padding: 44px 0 8px; border-bottom: 1px solid var(--line); }
+  .stage-no {
+    font-family: "IBM Plex Mono", monospace; font-size: 0.75rem; letter-spacing: 0.15em;
+    color: var(--measure); display: block; margin-bottom: 2px;
+  }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 28px; }
+  @media (max-width: 720px) { .cols { grid-template-columns: 1fr; } }
+
+  /* ---- カード・表 ---- */
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 20px; margin: 14px 0;
+  }
+  .card h4 { margin: 0 0 6px; font-size: 0.95rem; color: var(--gold); font-weight: 700; }
+  .card p { margin: 0.3em 0; font-size: 0.92rem; }
+  ul { padding-left: 1.3em; margin: 0.5em 0; }
+  li { margin: 0.35em 0; }
+  li::marker { color: var(--gold); }
+  .tablewrap { overflow-x: auto; margin: 16px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 0.76rem; letter-spacing: 0.08em; color: var(--muted); font-weight: 500; white-space: nowrap; }
+  td.mono { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .pill { display: inline-block; border-radius: 999px; padding: 0.05em 0.7em; font-size: 0.74rem; font-family: "IBM Plex Mono", monospace; border: 1px solid; }
+  .pill.ml   { color: var(--ml); border-color: var(--ml); }
+  .pill.det  { color: var(--ok); border-color: var(--ok); }
+
+  /* ---- 図 ---- */
+  figure { margin: 22px 0; }
+  figure svg { max-width: 100%; height: auto; display: block; margin: 0 auto; color: var(--ink); }
+  figcaption { font-size: 0.82rem; color: var(--muted); text-align: center; margin-top: 8px; }
+  .diagram-band { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 10px 8px; overflow-x: auto; }
+
+  /* パイプラインの流れアニメーション */
+  .flowline { stroke-dasharray: 6 7; animation: flow 1.6s linear infinite; }
+  @keyframes flow { to { stroke-dashoffset: -13; } }
+
+  /* ---- NCCデモ ---- */
+  .ncc-demo {
+    position: relative; height: 130px; margin: 18px auto; max-width: 560px;
+    background: var(--surface2); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+  }
+  .ncc-image {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-family: "Noto Sans JP", sans-serif; font-weight: 700; font-size: 40px;
+    color: var(--gold); filter: blur(1.6px); opacity: 0.95; letter-spacing: 0.02em;
+  }
+  .ncc-template {
+    position: absolute; top: 50%; left: 50%;
+    font-family: "Noto Sans JP", sans-serif; font-weight: 700; font-size: 40px;
+    color: var(--measure); white-space: nowrap; letter-spacing: 0.02em;
+    border: 1px dashed var(--measure); padding: 2px 6px; border-radius: 4px;
+    animation: nccsearch 5s ease-in-out infinite;
+  }
+  @keyframes nccsearch {
+    0%   { transform: translate(-58%, -66%) scale(0.86); opacity: 0.55; }
+    30%  { transform: translate(-46%, -40%) scale(1.10); opacity: 0.55; }
+    60%  { transform: translate(-53%, -55%) scale(0.97); opacity: 0.75; }
+    80%, 100% { transform: translate(-50%, -50%) scale(1.0); opacity: 1; }
+  }
+  .ncc-meter { position: absolute; left: 10px; right: 10px; bottom: 8px; height: 6px; border-radius: 3px; background: var(--line); }
+  .ncc-meter i { display: block; height: 100%; border-radius: 3px; background: var(--gold); animation: nccfill 5s ease-in-out infinite; }
+  @keyframes nccfill { 0% { width: 12%; } 30% { width: 34%; } 60% { width: 62%; } 80%, 100% { width: 96%; } }
+  .ncc-label { position: absolute; top: 6px; left: 10px; font-family: "IBM Plex Mono", monospace; font-size: 0.7rem; color: var(--muted); }
+
+  /* ---- 除去デモ (交互フェード) ---- */
+  .wipe-demo { position: relative; height: 110px; max-width: 560px; margin: 18px auto; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); }
+  .wipe-bg { position: absolute; inset: 0; background:
+      radial-gradient(ellipse 70% 120% at 50% 110%, #6a5420 0%, #2c2413 55%, #171309 100%); }
+  .wipe-text {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 34px; color: #e8d9a8; text-shadow: 0 0 14px rgba(230, 200, 120, 0.8);
+    animation: wipe 4s ease-in-out infinite;
+  }
+  .wipe-label { position: absolute; top: 6px; left: 10px; font-family: "IBM Plex Mono", monospace; font-size: 0.7rem; color: #cfc39f; }
+  @keyframes wipe { 0%, 35% { opacity: 1; } 55%, 80% { opacity: 0; } 100% { opacity: 1; } }
+
+  /* ---- スクロール出現 ---- */
+  .reveal { opacity: 0; transform: translateY(14px); transition: opacity 0.6s ease, transform 0.6s ease; }
+  .reveal.on { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .flowline, .ncc-template, .ncc-meter i, .wipe-text { animation: none !important; }
+    .reveal { opacity: 1; transform: none; transition: none; }
+  }
+
+  footer { padding: 36px 0 64px; color: var(--muted); font-size: 0.85rem; }
+  .kbd-block {
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 16px; font-family: "IBM Plex Mono", monospace; font-size: 0.82rem;
+    overflow-x: auto; white-space: pre; line-height: 1.7;
+  }
+</style>
+
+<div class="wrap">
+
+<header class="hero">
+  <span class="eyebrow">notebooklm-pdf2pptx — Technical Anatomy</span>
+  <h1>画像のスライドが、編集できるPPTXになるまで</h1>
+  <p class="lede">NotebookLM (Gemini Notebook) が生成するスライドは、文字まで含めて1枚の画像です。notebooklm-pdf2pptxは、その画像から文字を「読み・測り・解き・消し」、デザインを保ったままPowerPointネイティブの編集可能テキストへ置き換えます。このページは、使われている全ての機能・技術・ツール・AIを図解します。</p>
+  <div class="hero-stats">
+    <div class="stat"><b>8段</b>処理パイプライン</div>
+    <div class="stat"><b>2つ</b>だけのAI (全てローカル)</div>
+    <div class="stat"><b>±3px</b>実測較正済みの文字配置</div>
+    <div class="stat"><b>180秒</b>で100ページ</div>
+  </div>
+</header>
+
+<!-- ============================================================ -->
+<section class="reveal">
+  <h2>全体パイプライン</h2>
+  <p>1ページごとに8つの段階を通ります。各段の成果物は<code>work/pages/</code>にキャッシュされ、同じ入力なら再実行をスキップします(レジューム)。</p>
+
+  <div class="diagram-band">
+  <figure>
+  <svg viewBox="0 0 1040 240" role="img" aria-label="8段パイプライン: 入力取得→OCR→計測→解決→グループ化→除去→PPTX組立→検証">
+    <defs>
+      <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0 0 L8 4 L0 8 z" fill="currentColor"/>
+      </marker>
+    </defs>
+    <!-- 入力 -->
+    <rect x="8" y="78" width="92" height="60" rx="8" fill="none" stroke="currentColor" stroke-width="1.4"/>
+    <text x="54" y="103" text-anchor="middle" font-size="12" fill="currentColor">PDF /</text>
+    <text x="54" y="121" text-anchor="middle" font-size="12" fill="currentColor">画像</text>
+    <line class="flowline" x1="100" y1="108" x2="128" y2="108" stroke="currentColor" stroke-width="1.6" marker-end="url(#ar)"/>
+    <!-- 8 stages -->
+    <g font-size="12.5" text-anchor="middle">
+      <!-- stage boxes -->
+      <rect x="130" y="78" width="88" height="60" rx="8" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <text x="174" y="103" fill="currentColor">acquire</text>
+      <text x="174" y="121" fill="currentColor" font-size="10.5">入力の分解</text>
+
+      <rect x="246" y="78" width="88" height="60" rx="8" fill="none" stroke="#c98bd6" stroke-width="1.8"/>
+      <text x="290" y="103" fill="currentColor">ocr</text>
+      <text x="290" y="121" fill="currentColor" font-size="10.5">文字を読む</text>
+      <text x="290" y="66" fill="#c98bd6" font-size="10" font-family="monospace">ML: PP-OCRv6</text>
+
+      <rect x="362" y="78" width="88" height="60" rx="8" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <text x="406" y="103" fill="currentColor">measure</text>
+      <text x="406" y="121" fill="currentColor" font-size="10.5">文字を測る</text>
+
+      <rect x="478" y="78" width="88" height="60" rx="8" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <text x="522" y="103" fill="currentColor">solve</text>
+      <text x="522" y="121" fill="currentColor" font-size="10.5">文字を解く</text>
+
+      <rect x="594" y="78" width="88" height="60" rx="8" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <text x="638" y="103" fill="currentColor">group</text>
+      <text x="638" y="121" fill="currentColor" font-size="10.5">段落化</text>
+
+      <rect x="710" y="78" width="88" height="60" rx="8" fill="none" stroke="#c98bd6" stroke-width="1.8"/>
+      <text x="754" y="103" fill="currentColor">remove</text>
+      <text x="754" y="121" fill="currentColor" font-size="10.5">文字を消す</text>
+      <text x="754" y="66" fill="#c98bd6" font-size="10" font-family="monospace">ML: LaMa (適応)</text>
+
+      <rect x="826" y="78" width="88" height="60" rx="8" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <text x="870" y="103" fill="currentColor">compose</text>
+      <text x="870" y="121" fill="currentColor" font-size="10.5">PPTX組立</text>
+
+      <rect x="942" y="78" width="88" height="60" rx="8" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <text x="986" y="103" fill="currentColor">qa</text>
+      <text x="986" y="121" fill="currentColor" font-size="10.5">自動検証</text>
+    </g>
+    <!-- connectors -->
+    <g stroke="currentColor" stroke-width="1.6">
+      <line class="flowline" x1="218" y1="108" x2="244" y2="108" marker-end="url(#ar)"/>
+      <line class="flowline" x1="334" y1="108" x2="360" y2="108" marker-end="url(#ar)"/>
+      <line class="flowline" x1="450" y1="108" x2="476" y2="108" marker-end="url(#ar)"/>
+      <line class="flowline" x1="566" y1="108" x2="592" y2="108" marker-end="url(#ar)"/>
+      <line class="flowline" x1="682" y1="108" x2="708" y2="108" marker-end="url(#ar)"/>
+      <line class="flowline" x1="798" y1="108" x2="824" y2="108" marker-end="url(#ar)"/>
+      <line class="flowline" x1="914" y1="108" x2="940" y2="108" marker-end="url(#ar)"/>
+    </g>
+    <!-- outputs -->
+    <g font-size="11" font-family="monospace">
+      <line class="flowline" x1="870" y1="138" x2="870" y2="180" stroke="#e4c67b" stroke-width="1.6" marker-end="url(#ar)"/>
+      <text x="870" y="200" text-anchor="middle" fill="#e4c67b">output.pptx</text>
+      <line class="flowline" x1="986" y1="138" x2="986" y2="180" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"/>
+      <text x="986" y="200" text-anchor="middle" fill="currentColor">report.json / 比較画像</text>
+    </g>
+  </svg>
+  <figcaption>紫枠の2段だけが機械学習モデル。他の6段は全て計測とアルゴリズムによる決定論処理。</figcaption>
+  </figure>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section class="reveal">
+  <span class="stage-no">STAGE 1 — acquire</span>
+  <h2>入力の分解</h2>
+  <p>使用技術: <b>PyMuPDF (fitz)</b> + <b>Pillow</b>。PDFのページが「全面1枚の画像」で構成されている場合(NotebookLM出力の典型)、レンダリングし直さず<b>埋め込み画像そのものをネイティブ解像度(1376×768)で抽出</b>します。再サンプリングによる劣化ゼロで後段の計測精度が決まります。</p>
+
+  <div class="diagram-band">
+  <figure>
+  <svg viewBox="0 0 900 250" role="img" aria-label="PDFページを、全面画像・PDFテキスト・オーバーレイ画像の3層に分解する">
+    <defs>
+      <marker id="ar2" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0 0 L8 4 L0 8 z" fill="currentColor"/>
+      </marker>
+    </defs>
+    <rect x="20" y="55" width="200" height="140" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <text x="120" y="45" text-anchor="middle" font-size="13" fill="currentColor">PDFページ (PowerPoint書き出し)</text>
+    <rect x="34" y="70" width="172" height="80" rx="4" fill="none" stroke="#e4c67b" stroke-width="1.3"/>
+    <text x="120" y="113" text-anchor="middle" font-size="11" fill="#e4c67b">全面JPEG (文字焼き込み)</text>
+    <rect x="46" y="158" width="94" height="20" rx="3" fill="none" stroke="#7fbfcf" stroke-width="1.2"/>
+    <text x="93" y="172" text-anchor="middle" font-size="10" fill="#7fbfcf">追記テキストspan</text>
+    <rect x="150" y="158" width="56" height="20" rx="3" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="3 3"/>
+    <text x="178" y="172" text-anchor="middle" font-size="10" fill="currentColor">小画像</text>
+
+    <g stroke-width="1.5" font-size="11.5">
+      <line x1="222" y1="95" x2="330" y2="70" stroke="#e4c67b" marker-end="url(#ar2)"/>
+      <line x1="222" y1="140" x2="330" y2="130" stroke="#7fbfcf" marker-end="url(#ar2)"/>
+      <line x1="222" y1="172" x2="330" y2="190" stroke="currentColor" marker-end="url(#ar2)"/>
+    </g>
+    <g font-size="12">
+      <rect x="334" y="48" width="540" height="42" rx="7" fill="none" stroke="#e4c67b" stroke-width="1.4"/>
+      <text x="348" y="66" fill="#e4c67b">キャンバス画像 → OCR・計測・除去の対象</text>
+      <text x="348" y="82" fill="currentColor" font-size="10.5">extract_image でネイティブ解像度抽出。以後の全座標系の基準</text>
+      <rect x="334" y="108" width="540" height="42" rx="7" fill="none" stroke="#7fbfcf" stroke-width="1.4"/>
+      <text x="348" y="126" fill="#7fbfcf">PDFテキスト → フォント・サイズ・色が正確に分かる要素</text>
+      <text x="348" y="142" fill="currentColor" font-size="10.5">OCR不要・除去不要でそのまま編集可能テキストに再配置</text>
+      <rect x="334" y="168" width="540" height="42" rx="7" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="348" y="186" fill="currentColor">オーバーレイ画像 → 個別ピクチャとして再配置</text>
+      <text x="348" y="202" fill="currentColor" font-size="10.5">ソフトマスク(半透明)はPillowで正確にアルファ合成</text>
+    </g>
+  </svg>
+  <figcaption>ページを3層に分解。PDFに正確な情報が残っている層はOCRを通さない。</figcaption>
+  </figure>
+  </div>
+
+  <ul>
+    <li>画像フォルダ入力にも対応(NotebookLMから画像で出力した場合)</li>
+    <li>アスペクト比が16:9から2%以上外れる資料は、スライドサイズ自体を元比率に合わせる</li>
+    <li>全面画像でないページは高解像度レンダリングにフォールバック</li>
+  </ul>
+</section>
+
+<!-- ============================================================ -->
+<section class="reveal">
+  <span class="stage-no">STAGE 2 — ocr <span class="pill ml">機械学習</span></span>
+  <h2>文字を読む</h2>
+  <p>使用技術: <b>RapidOCR 3.9.2</b> + <b>ONNX Runtime</b>(推論エンジン)。モデルは <b>PP-OCRv6</b>(PaddleOCR系、Apache-2.0)。検出は<b>DBNet</b>(文字領域をポリゴンで切り出す)、認識は50言語統一モデルです。すべてローカル推論で、ネットワーク不要。</p>
+  <div class="cols">
+    <div class="card">
+      <h4>認識の工夫</h4>
+      <ul>
+        <li>認識前に<b>2×Lanczos拡大</b>(小さい文字の精度向上)</li>
+        <li>行単位で検出+<b>文字/単語ボックス</b>と信頼度を取得</li>
+        <li>信頼度の低い行は<code>report.json</code>と注記画像で人に引き渡す</li>
+        <li><code>--ocr-model medium</code>で日本語精度88.2%→90.5%に切替可</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>読み取り後の決定論後処理</h4>
+      <ul>
+        <li><b>スペース復元</b>: 文字間ギャップの統計外れ値を検出し、さらに<b>画像上に本当に空白列が連続するか</b>を検証してから挿入(検出ボックスの偽ギャップ対策)。単語ボックスが融合して届かないケース(camelCase・×等の記号境界)は、解決後にフォント送り幅から予測した位置の空白列を実測し、<b>挿入で照合が改善する場合のみ</b>採用する二段構え</li>
+        <li><b>強調数字ランの分割</b>: 「FY2027 <b>15.0</b>億円」のような大きな数字を、高さの段差検証つきで独立要素に切り出す</li>
+        <li><b>丸記号の字形確定</b>: 評価表の◎○●をOCRがラテン文字「O」と誤読するため、丸様文字のみの行はグリフ輪郭の入れ子構造(二重輪/単一輪+穴/塗り)を実測して正しい記号へ置換</li>
+        <li><b>行端の混同字裁定</b>: 装飾の波ダッシュ「〜」がカタカナ「ヘ」等に誤読された場合に備え、行頭・行末の混同字は代替字でテンプレートを描き直しNCC比較で確定</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section class="reveal">
+  <span class="stage-no">STAGE 3 — measure</span>
+  <h2>文字を測る</h2>
+  <p>使用技術: <b>OpenCV</b> + <b>NumPy</b>。行ごとに局所的な画像計測を行い、文字の「物理量」を数値化します。全て古典的画像処理で、閾値はどの資料にも共通です。</p>
+  <div class="tablewrap"><table>
+    <tr><th>計測</th><th>手法</th><th>役割</th></tr>
+    <tr><td>インク抽出</td><td>Otsu二値化 + <b>bbox内部の少数派</b>で極性決定。照合相関が弱い場合は<b>逆極性で再計測</b>し良い方を採用</td><td>明るい帯の上の白文字などの極性誤りを自己修復</td></tr>
+    <tr><td>コア分離</td><td><b>半値しきい値</b>(背景とピーク輝度の中点)</td><td>グロー(光彩)と字画本体を分離。ぼけに不変</td></tr>
+    <tr><td>文字の高さ</td><td><b>行密度トリム</b>(まばらな行を除外)</td><td>照合レンダ側と同一規則で対称に比較</td></tr>
+    <tr><td>太さ</td><td><b>距離変換</b>のメディアン×2</td><td>ウェイト(細字/太字)候補の絞り込み</td></tr>
+    <tr><td>色</td><td><b>純色サンプリング</b>: 背景から最も遠い上位30%画素</td><td>縁の混色で白が灰色にくすむのを防止</td></tr>
+    <tr><td>色ラン分割</td><td>文字セルごとの純色を計測し、<b>輝度正規化クロマ距離+輝度比</b>の切り替わりで行内を色ランに分割</td><td>「初年度<b style="color:#d8b45a">15億円</b>の」のような部分強調を1行1色に潰さない</td></tr>
+    <tr><td>グラデーション</td><td>上下1/3の色差(RGB距離≥28)</td><td>金色グラデ文字などを2色グラデで再現</td></tr>
+    <tr><td>罫線の混入除去</td><td>連結成分分析(幅85%超・扁平)</td><td>帯・バーの縁の影を文字と誤認しない</td></tr>
+    <tr><td>背景の性質</td><td>周囲リングの色分散 + ハロー率</td><td>除去方式(フラット/グロー/テクスチャ)の判定</td></tr>
+  </table></div>
+</section>
+
+<!-- ============================================================ -->
+<section class="reveal">
+  <span class="stage-no">STAGE 4 — solve (精度の核)</span>
+  <h2>文字を解く — テンプレート照合</h2>
+  <p>「認識したテキストを、候補フォントで<b>実際に描画して</b>、元画像と重ね合わせる」のがこのツールの心臓部です。描画は <b>Pillow (FreeType)</b>、メトリクスは <b>fontTools</b>、照合は <b>OpenCVの正規化相互相関</b> <code>matchTemplate(TM_CCOEFF_NORMED)</code> を使います。</p>
+
+  <div class="ncc-demo" aria-hidden="true">
+    <span class="ncc-label">NCC template matching</span>
+    <div class="ncc-image">国家戦略の全体像</div>
+    <div class="ncc-template">国家戦略の全体像</div>
+    <div class="ncc-meter"><i></i></div>
+  </div>
+  <figcaption style="text-align:center; font-size:0.82rem; color:var(--muted);">候補フォントの描画(点線枠)がサイズ・位置を変えながら元画像を走査し、相関が最大になる組合せを採用する</figcaption>
+
+  <h3>探索と選択のルール(全て一般則)</h3>
+  <ul>
+    <li><b>サイズ</b>: 初期推定の0.70〜1.12倍を1pxピッチで全探索(過大推定に強い非対称範囲)</li>
+    <li><b>位置</b>: マッチの許容変位は<b>インク中心基準で±0.18em</b>。グローで上端がずれても中心は安定し、隣の行への誤マッチも防ぐ</li>
+    <li><b>字間(spc)</b>: 各サイズで幅が元画像と一致するよう解析的に決定。ただし可読性下限<b>−0.08em</b>より詰めない。<b>+0.11em</b>を超える広げは「インク幅の膨張」の疑いがあるため、自然字間のテンプレートも並行照合してNCCに裁定させる</li>
+    <li><b>フォント・ウェイト</b>: ヒューリスティックスコア上位6候補+未登場ウェイト帯(細/中/太)の最良を必ず含め、最終判定は相関値で行う</li>
+    <li><b>正則化</b>: サイズ乖離・過大な字間・非ポータブルフォント・未収録グリフ(豆腐化)に軽いペナルティ。OCR検出枠の高さを<b>サイズ上限プライア</b>として利用。小さい文字(20px未満)は僅差時に軽いウェイトを優先(JPEG圧縮による過剰bold防止)</li>
+    <li><b>スクリプト処理</b>: 和文主体の行は和文候補、純欧文の行は欧文候補。和文文字や幾何記号(◎○●等)を1つでも含む混在行は<b>両候補の和集合</b>を土俵に乗せ、未収録グリフのペナルティに選ばせる。欧文主体の行はNFKC正規化で全角記号をASCII化(等幅フォントの未収録グリフ回避)</li>
+  </ul>
+
+  <h3>段落化 (STAGE 5 — group)</h3>
+  <p>同スタイル・等ピッチで縦に並ぶ行を1つのテキストボックスへまとめ、行間は実測ピッチを<b>固定行高(spcPts)</b>で指定。整列(左/中央/右)は行端の揃い方の分散から自動判定し、ブロック内のフォント・サイズの揺れは最良相関の行に統一します。</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="reveal">
+  <span class="stage-no">STAGE 6 — remove <span class="pill ml">機械学習(適応)</span></span>
+  <h2>文字を消す — 適応式3方式</h2>
+  <p>文字を編集可能にするには、背景から元の文字を消す必要があります。背景の性質を計測して、3方式を自動で使い分けます。</p>
+
+  <div class="wipe-demo" aria-hidden="true">
+    <span class="wipe-label">before / after (LaMa inpainting)</span>
+    <div class="wipe-bg"></div>
+    <div class="wipe-text">GLOBAL PROJECT</div>
+  </div>
+
+  <div class="diagram-band">
+  <figure>
+  <svg viewBox="0 0 900 230" role="img" aria-label="背景の性質による除去方式の分岐: フラットはOpenCV、グローとテクスチャはLaMa">
+    <defs>
+      <marker id="ar3" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0 0 L8 4 L0 8 z" fill="currentColor"/>
+      </marker>
+    </defs>
+    <rect x="20" y="85" width="150" height="56" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <text x="95" y="109" text-anchor="middle" font-size="12" fill="currentColor">背景を局所計測</text>
+    <text x="95" y="126" text-anchor="middle" font-size="10.5" fill="currentColor">色分散・ハロー率</text>
+    <g stroke-width="1.5" font-size="10.5">
+      <line x1="172" y1="95" x2="320" y2="45" stroke="currentColor" marker-end="url(#ar3)"/>
+      <text x="235" y="52" fill="currentColor">フラット / 緩勾配</text>
+      <line x1="172" y1="113" x2="320" y2="113" stroke="currentColor" marker-end="url(#ar3)"/>
+      <text x="222" y="105" fill="currentColor">発光グロー付き</text>
+      <line x1="172" y1="131" x2="320" y2="185" stroke="currentColor" marker-end="url(#ar3)"/>
+      <text x="222" y="172" fill="currentColor">写真・地図・テクスチャ</text>
+    </g>
+    <g font-size="12">
+      <rect x="324" y="20" width="552" height="50" rx="7" fill="none" stroke="#8fbf7f" stroke-width="1.4"/>
+      <text x="338" y="41" fill="#8fbf7f">OpenCV Telea修復 (決定論・高速)</text>
+      <text x="338" y="58" fill="currentColor" font-size="10.5">タイトなインクマスクのみ。GPU不要で完全に古典処理</text>
+      <rect x="324" y="88" width="552" height="50" rx="7" fill="none" stroke="#c98bd6" stroke-width="1.4"/>
+      <text x="338" y="109" fill="#c98bd6">LaMa + 矩形マスク (光彩ごと消す)</text>
+      <text x="338" y="126" fill="currentColor" font-size="10.5">グローの広がりを含む矩形で除去。滑らかな背景を再構成</text>
+      <rect x="324" y="156" width="552" height="50" rx="7" fill="none" stroke="#c98bd6" stroke-width="1.4"/>
+      <text x="338" y="177" fill="#c98bd6">LaMa + インク膨張マスク (デザイン保護)</text>
+      <text x="338" y="194" fill="currentColor" font-size="10.5">字画の形だけを消し、周囲の国旗・地図・矢印などを巻き込まない</text>
+    </g>
+  </svg>
+  <figcaption>LaMa (IOPaint/PyTorch) はローカル実行の画像修復モデル。全ページ分を1バッチにまとめ、モデルロードは1回だけ。</figcaption>
+  </figure>
+  </div>
+
+  <ul>
+    <li>デバイスは <code>CUDA → MPS → CPU</code> の順で自動選択。Windows+NVIDIAではbootstrapがCUDA版PyTorchを自動導入</li>
+    <li><code>--inpaint classic</code> でLaMaを使わない完全古典モードにも切替可能</li>
+    <li>グロー検出は「背景より輝度+25以上の発光ハロー」のみ。PPTX側では<b>PowerPointネイティブの光彩効果</b>として文字に再付与</li>
+  </ul>
+</section>
+
+<!-- ============================================================ -->
+<section class="reveal">
+  <span class="stage-no">STAGE 7 — compose</span>
+  <h2>PPTXを組む</h2>
+  <p>使用技術: <b>python-pptx</b> + <b>lxml</b>(OOXML/DrawingML直接注入)。PowerPointのレンダリング差を実測して選んだ「最も裏切られにくいXML表現」で書き出します。</p>
+
+  <div class="diagram-band">
+  <figure>
+  <svg viewBox="0 0 760 200" role="img" aria-label="固定行高spcPtsの行ボックスで、ベースライン=行高−ディセントとして文字を配置する">
+    <defs>
+      <marker id="ar4" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0 0 L8 4 L0 8 z" fill="currentColor"/>
+      </marker>
+    </defs>
+    <rect x="60" y="30" width="480" height="120" rx="4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-dasharray="5 4"/>
+    <text x="66" y="22" font-size="11" fill="currentColor">テキストボックス (マージン0 / 折返し無効 / 自動調整無効)</text>
+    <line x1="60" y1="122" x2="540" y2="122" stroke="#e4c67b" stroke-width="1.6"/>
+    <text x="546" y="126" font-size="11" fill="#e4c67b">ベースライン</text>
+    <text x="90" y="112" font-size="52" font-family="'Shippori Mincho', serif" fill="currentColor">文字の配置</text>
+    <line x1="570" y1="30" x2="570" y2="150" stroke="#7fbfcf" stroke-width="1.4" marker-end="url(#ar4)"/>
+    <text x="580" y="80" font-size="11" fill="#7fbfcf">行高を spcPts で固定</text>
+    <text x="580" y="96" font-size="11" fill="#7fbfcf">(レンダラ依存を排除)</text>
+    <line x1="620" y1="122" x2="620" y2="150" stroke="#e4c67b" stroke-width="1.4"/>
+    <text x="630" y="140" font-size="11" fill="#e4c67b">ディセント</text>
+    <text x="60" y="180" font-size="11.5" fill="currentColor">ベースライン = 行高 − ディセント … CoreText/GDIどちらでも成立 (実測誤差 ±3px)</text>
+  </svg>
+  <figcaption>通常の行送りはmacとWindowsでベースライン位置が最大0.28emずれる。行高固定はそれを消す。</figcaption>
+  </figure>
+  </div>
+
+  <div class="cols">
+    <div class="card">
+      <h4>書き出しているXML表現</h4>
+      <ul>
+        <li><code>a:spcPts</code> — 全段落の行高固定</li>
+        <li><code>a:latin</code> / <code>a:ea</code> / <code>a:cs</code> — 和欧フォント両指定</li>
+        <li><code>spc</code> — 1/100pt単位の字間</li>
+        <li><code>a:gradFill</code> — 文字のグラデーション塗り</li>
+        <li><code>a:glow</code> — 光彩効果</li>
+        <li><code>kern="10000"</code> — カーニング無効化(幅計算の決定性)</li>
+        <li><code>wrap="none"</code> + <code>noAutofit</code> — 再レイアウト禁止</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>サイズと堅牢性</h4>
+      <ul>
+        <li>座標は全てEMU(1/914400インチ)で厳密変換</li>
+        <li>背景はJPEG化+python-pptxの同一画像dedupでファイル肥大を防止</li>
+        <li>rPr子要素をOOXMLスキーマ順に挿入(厳格なパーサでも壊れない)</li>
+        <li>ボックス幅に折返し余裕(wrap非対応レンダラ対策)</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>フォント戦略</h3>
+  <ul>
+    <li><b>ポータブル優先</b>: Noto Sans JP / Oswald / Roboto Condensed / Roboto Mono(等幅) / Rounded Mplus 1c(丸ゴシック) / BIZ UDPGothic(全てOFLまたはWindows標準)を優先。どの環境でも同名で解決でき、<code>fetch_fonts.py --install</code>で導入できる</li>
+    <li><b>fontTools</b>でname・OS/2・hhea・cmapテーブルを解析し、PowerPointが解決できる<b>バインディング名</b>(例: Bold接尾辞の剥がし、非RIBBIはフルネーム)を導出</li>
+    <li><b>グリフ収録チェック</b>: 選択フォントに無い文字(豆腐化)は候補ペナルティ+要確認レポートへ</li>
+    <li>実機レンダラで較正済み(<code>tools/calibrate.py</code>): ベースライン誤差±3px以内</li>
+  </ul>
+</section>
+
+<!-- ============================================================ -->
+<section class="reveal">
+  <span class="stage-no">STAGE 8 — qa</span>
+  <h2>自動検証</h2>
+  <p>変換のたびに「元画像とどれだけ一致したか」を自動で数値化・可視化します。AIによる目視に頼らない検証ループです。</p>
+  <div class="tablewrap"><table>
+    <tr><th>ツール</th><th>内容</th></tr>
+    <tr><td class="mono">qa (組込み)</td><td>解決値を同じフォントで自己レンダリングし、元画像との<b>SSIM</b>と差分画像を出力</td></tr>
+    <tr><td class="mono">tools/render_quicklook.py</td><td>Apple純正エンジン(QuickLook)でPPTXを実レンダリング(1ページずつ単一スライド化)</td></tr>
+    <tr><td class="mono">tools/compare.py</td><td>元画像とレンダ結果の見開き比較シート</td></tr>
+    <tr><td class="mono">tools/review_sheet.py</td><td>低信頼OCR行を元画像上に赤枠+認識文字列で注記(人の確認箇所を明示)</td></tr>
+    <tr><td class="mono">tools/measure_alignment.py</td><td>要素単位のズレ(位置・幅・高さ)を自動計測し統計と最悪箇所を列挙</td></tr>
+    <tr><td class="mono">tools/smoke_test.py</td><td>PPTX構造検査(はみ出し・行間・フォント指定の欠落)</td></tr>
+    <tr><td class="mono">tools/calibrate.py</td><td>既知位置のプローブPPTXを実レンダラで測定し、行レイアウト定数を較正</td></tr>
+  </table></div>
+</section>
+
+<!-- ============================================================ -->
+<section class="reveal">
+  <h2>AIはどこに使われているか</h2>
+  <p>機械学習は<b>2箇所だけ</b>。どちらもローカル推論で、クラウドAPI・生成AIには一切依存しません。同じ入力からは常に同じ出力が得られます。</p>
+  <div class="tablewrap"><table>
+    <tr><th>コンポーネント</th><th>種別</th><th>モデル / 手法</th><th>実行場所</th><th>ライセンス</th></tr>
+    <tr><td>文字の検出・認識</td><td><span class="pill ml">ML</span></td><td>PP-OCRv6 (DBNet検出 + 50言語認識)</td><td class="mono">ONNX Runtime / CPU</td><td class="mono">Apache-2.0</td></tr>
+    <tr><td>背景修復 (複雑背景のみ)</td><td><span class="pill ml">ML</span></td><td>LaMa (大域マスク画像修復)</td><td class="mono">PyTorch / GPU可</td><td class="mono">Apache-2.0</td></tr>
+    <tr><td>計測・照合・配置・色・字間</td><td><span class="pill det">決定論</span></td><td>OpenCV / Pillow / fontTools / NCC</td><td class="mono">CPU</td><td class="mono">—</td></tr>
+    <tr><td>フラット背景の除去</td><td><span class="pill det">決定論</span></td><td>OpenCV Telea修復</td><td class="mono">CPU</td><td class="mono">—</td></tr>
+    <tr><td>PPTX生成・検証</td><td><span class="pill det">決定論</span></td><td>python-pptx / lxml / SSIM</td><td class="mono">CPU</td><td class="mono">—</td></tr>
+  </table></div>
+  <p style="font-size:0.9rem; color:var(--muted);">かつて必要だった「AIによる手調整」(旧版では112要素を手作業で補正)は、STAGE 4のテンプレート照合が肩代わりしています。資料固有の座標・補正値はコードに存在しません。</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="reveal">
+  <h2>スケーラビリティと性能</h2>
+  <div class="cols">
+    <div class="card">
+      <h4>100ページ対応の設計</h4>
+      <ul>
+        <li>ページ毎に中間物をキャッシュ、入力+設定のハッシュで<b>レジューム</b></li>
+        <li>メモリは常に1ページ分のみ(100ページでもピーク約1.2GB)</li>
+        <li>LaMaは対象ページを集めて<b>1プロセス一括実行</b>(モデルロード1回)</li>
+        <li>同一背景画像はPPTX内で自動共有(ファイル肥大防止)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>実測値</h4>
+      <ul>
+        <li>OCR+計測+照合: 2〜4秒/ページ (CPU)</li>
+        <li>100ページ(classicモード): <b>180秒</b></li>
+        <li>LaMa: GPU(CUDA/MPS)で1〜3秒/ページ、CPUでは数十秒〜</li>
+        <li>再現度 SSIM: 0.87〜0.95 (検証5ページ)</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section class="reveal">
+  <h2>技術スタック全一覧</h2>
+  <div class="tablewrap"><table>
+    <tr><th>レイヤ</th><th>技術 / ツール</th><th>用途</th></tr>
+    <tr><td>言語・環境</td><td class="mono">Python 3.11 / venv ×2</td><td>本体環境と LaMa 環境を分離(依存衝突の回避)</td></tr>
+    <tr><td>PDF</td><td class="mono">PyMuPDF 1.26</td><td>ページ解析・埋め込み画像抽出・テキストspan・レンダリング</td></tr>
+    <tr><td>OCR</td><td class="mono">RapidOCR 3.9.2 + onnxruntime 1.29</td><td>PP-OCRv6モデルの読込・推論・単語ボックス</td></tr>
+    <tr><td>画像処理</td><td class="mono">OpenCV 5 / NumPy</td><td>二値化・距離変換・連結成分・NCC照合・Telea修復・SSIM</td></tr>
+    <tr><td>描画・フォント</td><td class="mono">Pillow 12 (FreeType) / fontTools 4.63</td><td>照合用テキスト描画・フォントメトリクス/名前/カバレッジ解析</td></tr>
+    <tr><td>修復モデル</td><td class="mono">IOPaint 1.6 (LaMa) / PyTorch 2.2</td><td>複雑背景からの文字消去。CUDA/MPS/CPU自動選択</td></tr>
+    <tr><td>PPTX生成</td><td class="mono">python-pptx 1.0 / lxml</td><td>スライド組立とDrawingML XMLの直接注入</td></tr>
+    <tr><td>フォント資産</td><td class="mono">Noto Sans JP / Oswald / Roboto Condensed / Roboto Mono / Rounded Mplus 1c / BIZ UDPGothic</td><td>OFL・Windows標準のポータブルフォント(自動DL/インストール)</td></tr>
+    <tr><td>検証レンダラ</td><td class="mono">QuickLook (macOS) / LibreOffice</td><td>PPTXの実レンダリングによる回帰確認</td></tr>
+  </table></div>
+</section>
+
+<footer class="reveal">
+  <p><b>実行方法</b></p>
+  <div class="kbd-block">cd notebooklm-pdf2pptx
+.venv/bin/python convert.py "input.pdf" -o output.pptx      # 変換
+.venv/bin/python tools/review_sheet.py                      # 要確認箇所の注記画像
+.venv/bin/python tools/compare.py --renders work/renders_ql # 元画像との見開き比較</div>
+  <p style="margin-top:16px;">notebooklm-pdf2pptx — 非公式ツール (GoogleおよびNotebookLMとは無関係です) (git管理・全実装はコミット履歴に記録)</p>
+</footer>
+
+</div>
+
+<script>
+  const io = new IntersectionObserver((entries) => {
+    for (const e of entries) if (e.isIntersecting) { e.target.classList.add("on"); io.unobserve(e.target); }
+  }, { threshold: 0.08 });
+  document.querySelectorAll(".reveal").forEach((el) => io.observe(el));
+</script>
