@@ -58,7 +58,7 @@ def _hash_inputs(paths: list[Path], settings: Settings) -> str:
         "inpaint": settings.inpaint,
         "render_scale": settings.render_scale,
         "non_portable_penalty": settings.non_portable_penalty,
-        "version": 16,
+        "version": 18,
     }
     digest.update(json.dumps(relevant, sort_keys=True).encode())
     return digest.hexdigest()[:16]
@@ -237,6 +237,38 @@ class Converter:
                             ink, style = ink_alt, style_alt
                 if style is None:
                     continue
+                # 発光整合: グロー(光彩)は字画から散った光なので、本体色が
+                # ハローより大幅に暗いのは極性誤りの典型(強いグローがbbox内の
+                # 明暗多数決を外す)。NCCは極性正規化されるため相関だけでは
+                # 検出できず、輝度の物理的整合で判定する。明極性で再計測し、
+                # 本体がハローと整合し照合が同等なら採用する。
+                _glow_probe = removal.detect_glow(image, ink, pt_per_px)
+                if _glow_probe is not None:
+                    def _lum(c):
+                        return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+                    if _lum(_glow_probe["color"]) > _lum(style.color) + 60:
+                        ink_b = measure_ink(image, line.bbox, force_polarity=True)
+                        if os.environ.get("NBLM_DEBUG_EMISSIVE"):
+                            print(f"[emissive] {text[:20]!r} core_lum="
+                                  f"{_lum(style.color):.0f} halo_lum="
+                                  f"{_lum(_glow_probe['color']):.0f} alt_lum="
+                                  f"{_lum(ink_b.color) if ink_b else None}")
+                        if (ink_b is not None
+                                and _lum(ink_b.color) > _lum(style.color) + 30):
+                            style_b = refine_line(
+                                text, ink_b, image, self.candidates,
+                                pt_per_px, settings, size_scale_hint=size_hint,
+                                det_height_px=line.bbox[3] - line.bbox[1])
+                            if os.environ.get("NBLM_DEBUG_EMISSIVE"):
+                                print(f"[emissive]   ncc {style.ncc} -> "
+                                      f"{style_b.ncc if style_b else None}")
+                            # NCCは極性正規化されるため誤極性でも高相関が出る
+                            # (グロー帯の形と相関するため)。輝度の物理的整合を
+                            # 優先し、NCCは粗い門番(0.30以上かつ元の7割以上)に留める
+                            if style_b is not None and (
+                                    (style_b.ncc or 0) >= 0.30
+                                    and (style_b.ncc or 0) >= (style.ncc or 0) * 0.7):
+                                ink, style = ink_b, style_b
                 # 行頭・行末の紛らわしい字形(装飾の波ダッシュ等)をNCCで裁定
                 text, style = arbitrate_edge_confusables(
                     image, text, style, ink, pt_per_px, settings)
@@ -561,6 +593,13 @@ class Converter:
                 anchors.append(statistics.median(group))
             if not anchors:
                 anchors = [statistics.median(m.style.size_pt for m in cluster)]
+            def _plausible(style_new, m) -> bool:
+                """幅サニティ: 行送り幅が実測インク幅から大きく乖離する解は
+                誤スナップ(サイズ過大で幅が伸びスライド外へはみ出す)なので
+                棄却する。短い行の字面側余白ぶんはemに比例して許容する。"""
+                em_new = style_new.size_pt / pt_per_px
+                return style_new.advance_w_px <= m.ink.ink_w * 1.12 + 1.2 * em_new
+
             for m in cluster:
                 target_pt = min(anchors, key=lambda a: abs(a - m.style.size_pt))
                 if abs(m.style.size_pt - target_pt) <= target_pt * 0.04:
@@ -569,14 +608,96 @@ class Converter:
                 refined = refine_by_template(
                     image, m.text, m.style.face, m.style, m.ink,
                     pt_per_px, self.settings, size_lock_px=lock_px)
-                if refined is not None:
+                if refined is not None and _plausible(refined[0], m):
                     m.style = refined[0]
-                else:
+                elif refined is None:
                     res = resolve_with(m.text, m.ink, m.style.face, target_pt,
                                        pt_per_px, self.settings)
-                    if res is not None:
+                    if res is not None and _plausible(res, m):
                         res.ncc = m.style.ncc
                         m.style = res
+
+            # --- 面(フォント・ウェイト)の調和と左端スナップ ---
+            # 同格アイテムは同じフォント・ウェイトのはずだが、短い行は
+            # 1行単独の照合では候補が揺れる。色のサブグループ(白の本文と
+            # 金の注釈を混ぜない)ごとに、照合の強い行の多数決フォントへ
+            # 揃え直し、列の左端も中央値へスナップする。
+            def _lum(c):
+                return max(0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2], 1.0)
+
+            def _same_color(c1, c2) -> bool:
+                l1, l2 = _lum(c1), _lum(c2)
+                chroma = sum((a / l1 * 160 - b / l2 * 160) ** 2
+                             for a, b in zip(c1, c2)) ** 0.5
+                return chroma <= 25 and max(l1, l2) / min(l1, l2) <= 2.2
+
+            subgroups: list[list] = []
+            for m in cluster:
+                for g in subgroups:
+                    if _same_color(m.style.color, g[0].style.color):
+                        g.append(m)
+                        break
+                else:
+                    subgroups.append([m])
+            for g in subgroups:
+                if len(g) < 3:
+                    continue
+                votes: dict = {}
+                for m in g:
+                    if (m.style.ncc or 0) >= 0.55:
+                        key = (m.style.face.path, m.style.face.index)
+                        entry = votes.setdefault(key, [0, m.style.face])
+                        entry[0] += 1
+                if votes:
+                    win_key, (count, face) = max(votes.items(),
+                                                 key=lambda kv: kv[1][0])
+                    if count >= 2:
+                        for m in g:
+                            if (m.style.face.path, m.style.face.index) == win_key:
+                                continue
+                            lock_px = max(7, int(round(
+                                m.style.size_pt / pt_per_px)))
+                            seed = resolve_with(m.text, m.ink, face,
+                                                m.style.size_pt, pt_per_px,
+                                                self.settings)
+                            if seed is None:
+                                continue
+                            refined = refine_by_template(
+                                image, m.text, face, seed, m.ink,
+                                pt_per_px, self.settings, size_lock_px=lock_px)
+                            if refined is None:
+                                continue
+                            new_style, new_ncc = refined
+                            # 一様性は設計上の真実である可能性が高いので、
+                            # 照合が大きく劣化しない限り多数派の面を採用する
+                            # (幅サニティを満たす場合のみ)
+                            if (new_ncc >= (m.style.ncc or 0) - 0.10
+                                    and _plausible(new_style, m)):
+                                m.style = new_style
+                # 列内左端スナップ: 左端が近い(±0.6em)行群の原点を中央値へ
+                em_px = statistics.median(
+                    m.style.size_pt for m in g) / pt_per_px
+                ordered = sorted(g, key=lambda m: m.style.origin_x_px)
+                column: list = []
+
+                def _snap(col: list) -> None:
+                    if len(col) < 3:
+                        return
+                    med = statistics.median(m.style.origin_x_px for m in col)
+                    if os.environ.get("NBLM_DEBUG_SNAP"):
+                        print(f"[snap] n={len(col)} med={med:.1f} "
+                              f"xs={[round(m.style.origin_x_px,1) for m in col]}")
+                    for m in col:
+                        if abs(m.style.origin_x_px - med) <= em_px * 0.35:
+                            m.style.origin_x_px = med
+
+                for m in ordered:
+                    if column and (m.style.origin_x_px
+                                   - column[-1].style.origin_x_px) > em_px * 0.6:
+                        _snap(column)
+                        column = []
+                    column.append(m)
+                _snap(column)
 
     def _restore_layout_spaces(self, text, style, ink, image, line, pt_per_px):
         """OCR単語ボックスに現れないスペース欠落をレイアウト検証で復元する。
