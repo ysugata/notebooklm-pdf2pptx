@@ -58,7 +58,7 @@ def _hash_inputs(paths: list[Path], settings: Settings) -> str:
         "inpaint": settings.inpaint,
         "render_scale": settings.render_scale,
         "non_portable_penalty": settings.non_portable_penalty,
-        "version": 15,
+        "version": 16,
     }
     digest.update(json.dumps(relevant, sort_keys=True).encode())
     return digest.hexdigest()[:16]
@@ -312,6 +312,7 @@ class Converter:
                         complex_mask, removal.complex_mask(image, ink, settings))
                     n_complex += 1
 
+        self._harmonize_sizes(solved_lines, image, pt_per_px)
         blocks = group_lines(solved_lines, w, pt_per_px)
         self._unify_blocks(blocks, image, pt_per_px)
         self._measure_color_runs(blocks, image, pt_per_px)
@@ -517,6 +518,65 @@ class Converter:
             for ni in drop:
                 rescued.update(id(l) for l in matched_lines.get(ni, []))
         return covers, drop, rescued
+
+    def _harmonize_sizes(self, solved_lines, image, pt_per_px: float) -> None:
+        """ページ内で同じ設計サイズとみられる行のサイズ揺れを統一する。
+
+        表・カード群の同格アイテム(箇条書き・注釈列など)は1行ずつ独立に
+        解かれるため、グローやJPEG劣化の計測揺れで±10〜20%のサイズ
+        ばらつきが出る。実測インク高が近い行をクラスタ化し、照合の強い行
+        (NCC≥0.6)が3行以上支持するサイズへスナップして位置を解き直す。
+        強い支持が2つ以上ある場合は最寄りへ寄せる(意図的な2段サイズを保護)。
+        """
+        import statistics
+
+        items = [l for l in solved_lines if l.ink is not None]
+        if len(items) < 4:
+            return
+        items.sort(key=lambda l: l.ink.ink_h)
+        clusters: list[list] = []
+        for line in items:
+            if clusters:
+                med = statistics.median(m.ink.ink_h for m in clusters[-1])
+                if line.ink.ink_h <= med * 1.15:
+                    clusters[-1].append(line)
+                    continue
+            clusters.append([line])
+        for cluster in clusters:
+            if len(cluster) < 4:
+                continue
+            # アンカー: NCCの強い行のサイズを±5%でまとめ、3行以上の支持が
+            # あるものだけを信頼する(2行以下は幅適合の偶然一致の可能性)
+            strong = sorted((m.style.size_pt for m in cluster
+                             if (m.style.ncc or 0) >= 0.6))
+            anchors: list[float] = []
+            group: list[float] = []
+            for size in strong:
+                if group and size > group[0] * 1.05:
+                    if len(group) >= 3:
+                        anchors.append(statistics.median(group))
+                    group = []
+                group.append(size)
+            if len(group) >= 3:
+                anchors.append(statistics.median(group))
+            if not anchors:
+                anchors = [statistics.median(m.style.size_pt for m in cluster)]
+            for m in cluster:
+                target_pt = min(anchors, key=lambda a: abs(a - m.style.size_pt))
+                if abs(m.style.size_pt - target_pt) <= target_pt * 0.04:
+                    continue
+                lock_px = max(7, int(round(target_pt / pt_per_px)))
+                refined = refine_by_template(
+                    image, m.text, m.style.face, m.style, m.ink,
+                    pt_per_px, self.settings, size_lock_px=lock_px)
+                if refined is not None:
+                    m.style = refined[0]
+                else:
+                    res = resolve_with(m.text, m.ink, m.style.face, target_pt,
+                                       pt_per_px, self.settings)
+                    if res is not None:
+                        res.ncc = m.style.ncc
+                        m.style = res
 
     def _restore_layout_spaces(self, text, style, ink, image, line, pt_per_px):
         """OCR単語ボックスに現れないスペース欠落をレイアウト検証で復元する。
