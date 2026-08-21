@@ -58,6 +58,9 @@ class CanvasPage:
     slide_emu: tuple[int, int] | None = None   # PPTX入力時: 出力へ引き継ぐスライドサイズ
     native_xml: list[str] = field(default_factory=list)  # PPTX入力時: 持ち越すネイティブ図形XML
     cover_rects_px: list[tuple[float, float, float, float]] = field(default_factory=list)
+    # 塗り付きネイティブ「テキスト」図形のカバー情報 (冗長パッチ検出用):
+    # {rect, native_index, text, group_sp_total}
+    cover_shapes: list[dict] = field(default_factory=list)
     # ↑ 不透明な持ち越し要素が覆う領域。この下の焼き込み文字は原本で不可視のため
     #   復元・除去の対象から外す(隠しテキストの蘇生防止)
 
@@ -408,14 +411,8 @@ def load_pptx_pages(pptx_path: Path, settings: Settings, pages: list[int] | None
             if _image_is_opaque(shape.image.blob):
                 cover_rects.append(rect)
 
-        # 塗りつぶし付きネイティブ図形もカバー領域として扱う
-        for shape, parents in _iter_shapes_deep(slide.shapes):
-            if shape.shape_type in (6, 13):  # GROUP/PICTUREは対象外(上で処理)
-                continue
-            if _shape_has_opaque_fill(shape):
-                cover_rects.append(to_px_rect(_shape_abs_bbox_emu(shape, parents)))
-
         native_xml: list[str] = []
+        native_index_of: dict[int, int] = {}  # id(トップレベル要素) → native_xmlの添字
         for shape in slide.shapes:  # トップレベルのみ(グループは丸ごと)
             if shape.shape_type == 13:
                 continue  # ピクチャは上で処理済み
@@ -431,7 +428,32 @@ def load_pptx_pages(pptx_path: Path, settings: Settings, pages: list[int] | None
             has_content = element.findall(
                 ".//{http://schemas.openxmlformats.org/drawingml/2006/main}t") or                 shape.shape_type != 6
             if has_content:
+                native_index_of[id(shape._element)] = len(native_xml)
                 native_xml.append(etree.tostring(element, encoding="unicode"))
+
+        # 塗りつぶし付きネイティブ図形もカバー領域として扱う。
+        # テキストを持つものは「焼き込みテキストへの上書きパッチ」の可能性が
+        # あるため、後段の冗長判定用にネイティブ図形との対応も記録する。
+        SP_TAG = "{http://schemas.openxmlformats.org/presentationml/2006/main}sp"
+        cover_shapes: list[dict] = []
+        for shape, parents in _iter_shapes_deep(slide.shapes):
+            if shape.shape_type in (6, 13):  # GROUP/PICTUREは対象外(上で処理)
+                continue
+            if _shape_has_opaque_fill(shape):
+                rect = to_px_rect(_shape_abs_bbox_emu(shape, parents))
+                cover_rects.append(rect)
+                top = parents[0] if parents else shape
+                text = shape.text_frame.text if shape.has_text_frame else ""
+                top_el = top._element
+                sp_total = len(top_el.findall(f".//{SP_TAG}"))
+                if top_el.tag == SP_TAG:
+                    sp_total += 1
+                cover_shapes.append({
+                    "rect": rect,
+                    "native_index": native_index_of.get(id(top_el)),
+                    "text": text,
+                    "group_sp_total": max(sp_total, 1),
+                })
 
         px_per_pt = scale_x * 12700.0  # EMU→pt換算込み (px / pt)
         yield CanvasPage(
@@ -445,4 +467,5 @@ def load_pptx_pages(pptx_path: Path, settings: Settings, pages: list[int] | None
             slide_emu=(slide_w, slide_h),
             native_xml=native_xml,
             cover_rects_px=cover_rects,
+            cover_shapes=cover_shapes,
         )

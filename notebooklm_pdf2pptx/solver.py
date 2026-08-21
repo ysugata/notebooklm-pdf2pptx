@@ -248,6 +248,17 @@ def refine_line(text: str, ink: InkStats, image, candidates: Candidates,
                                    pt_per_px, settings)
             if clamped is not None:
                 best_style = clamped
+    elif det_height_px and (best_style.ncc or 0) < 0.25:
+        # 照合はしたが相関が極端に低い: テンプレート由来のサイズ・位置は
+        # 信用できない(グロー・パネル発光の混入で膨張した解の典型)。
+        # 検出枠の高さでサイズをクランプし、位置は再解決に委ねる。
+        max_size_pt = det_height_px * 0.88 * pt_per_px
+        if best_style.size_pt > max_size_pt:
+            clamped = resolve_with(text, ink, best_style.face, max_size_pt,
+                                   pt_per_px, settings)
+            if clamped is not None:
+                clamped.ncc = best_style.ncc
+                best_style = clamped
     return best_style
 
 

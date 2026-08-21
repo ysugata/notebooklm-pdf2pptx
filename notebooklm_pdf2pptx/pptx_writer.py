@@ -268,7 +268,12 @@ def _add_block(slide, block: dict, emu_x: float, emu_y: float, pt_per_px: float)
 
     baseline0_px = first["baseline_y_px"]
     top_px = baseline0_px - fbo_pt / pt_per_px
-    height_pt = fbo_pt + (n - 1) * (pitch_pt or 0) + max(
+    # 行間は一律ピッチではなく実測ベースライン間隔を段落ごとに指定する。
+    # 中央値ピッチの一律適用は±1px程度の実測揺らぎを累積させ、
+    # 行数が多いブロックで下の行ほど位置がずれるため。
+    baselines = [l["baseline_y_px"] for l in lines]
+    gaps_pt = [(baselines[i] - baselines[i - 1]) * pt_per_px for i in range(1, n)]
+    height_pt = fbo_pt + sum(gaps_pt) + max(
         _win_metrics_pt(font_path, font_index, size_pt)[1], 2.0)
 
     # 幅: 最長行の送り幅 + 余裕。整列に応じて左端を決める。
@@ -310,7 +315,8 @@ def _add_block(slide, block: dict, emu_x: float, emu_y: float, pt_per_px: float)
             "left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER, "right": PP_ALIGN.RIGHT,
         }[align]
         paragraph.space_before = paragraph.space_after = Pt(0)
-        _set_exact_line_spacing(paragraph, pitch_pt)
+        _set_exact_line_spacing(
+            paragraph, pitch_pt if index == 0 else gaps_pt[index - 1])
         glow = line.get("glow")
 
         def emit_run(text: str, color, gradient) -> None:

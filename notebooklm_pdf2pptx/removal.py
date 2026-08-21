@@ -135,6 +135,46 @@ def rect_mask(ink: InkStats, shape: tuple[int, int], pad_ratio: float = 0.28) ->
     return mask
 
 
+def ghost_mask(src: np.ndarray, out: np.ndarray,
+               mask: np.ndarray) -> np.ndarray | None:
+    """修復結果に残るテキストの「残像(ゴースト)」領域を実測で検出する。
+
+    強コントラスト文字やグレア(強い光)上の文字は1回のインペイントで
+    消え切らず、ぼやけた文字模様が背景に残ることがある。マスクの連結成分
+    ごとに「修復後も元のインク模様と相関が残り、かつ周囲より模様の起伏が
+    大きい」場合をゴーストと判定し、膨張させた再修復マスクを返す。
+    ゴーストが無ければ None。判定は全て相対量で、デザインに依存しない。
+    """
+    a = cv2.cvtColor(src, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    b = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    n_labels, labels, stats, _cent = cv2.connectedComponentsWithStats(
+        (mask > 0).astype(np.uint8), connectivity=8)
+    ghost = np.zeros_like(mask)
+    found = False
+    for label in range(1, n_labels):
+        x, y, w, h, area = stats[label]
+        if area < 80:
+            continue
+        comp = labels == label
+        ring = cv2.dilate(comp.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
+        ring &= ~comp
+        av, bv = a[comp], b[comp]
+        if len(av) < 60 or len(b[ring]) < 30:
+            continue
+        av_c, bv_c = av - av.mean(), bv - bv.mean()
+        denom = float(np.sqrt((av_c ** 2).sum() * (bv_c ** 2).sum()))
+        corr = float((av_c * bv_c).sum() / denom) if denom > 1e-6 else 0.0
+        inside_std = float(bv.std())
+        ring_std = float(b[ring].std())
+        if corr > 0.50 and inside_std > max(10.0, ring_std * 1.5):
+            grow = max(4, int(h * 0.25))
+            kernel = np.ones((grow, grow), np.uint8)
+            ghost = np.maximum(
+                ghost, cv2.dilate(comp.astype(np.uint8) * 255, kernel))
+            found = True
+    return ghost if found else None
+
+
 def remove_flat(image: np.ndarray, masks: list[np.ndarray]) -> np.ndarray:
     if not masks:
         return image

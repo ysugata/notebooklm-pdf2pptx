@@ -58,7 +58,7 @@ def _hash_inputs(paths: list[Path], settings: Settings) -> str:
         "inpaint": settings.inpaint,
         "render_scale": settings.render_scale,
         "non_portable_penalty": settings.non_portable_penalty,
-        "version": 9,
+        "version": 15,
     }
     digest.update(json.dumps(relevant, sort_keys=True).encode())
     return digest.hexdigest()[:16]
@@ -109,12 +109,23 @@ class Converter:
                 flush=True,
             )
 
-        if lama_queue:
-            self._run_lama(pages_dir, lama_queue)
+        # LaMaはチャンク単位で実行し、チャンクごとに結果を書き戻して完了を
+        # 記録する。途中で中断されても完了済みチャンクは失われず、
+        # 再実行時は残りだけを処理する(100ページ級のレジューム耐性)。
+        LAMA_CHUNK = 12
+        for start in range(0, len(lama_queue), LAMA_CHUNK):
+            self._run_lama(pages_dir, lama_queue[start:start + LAMA_CHUNK])
 
         from .pptx_writer import build_presentation
 
         report = build_presentation(processed, pages_dir, output_path, settings, self.library)
+
+        # PPTX入力の場合、テーマ(配色・フォントスキーム)を入力から持ち越す。
+        # 持ち越したネイティブ図形は schemeClr / テーマフォント参照を含むため、
+        # 出力側のテーマが違うと色・折り返しが入力と変わってしまう。
+        # 本ツール生成のテキストは全て実値指定なのでテーマ差し替えの影響を受けない。
+        if kind == "pptx":
+            self._carry_theme(paths[0], output_path)
 
         if settings.qa_enabled:
             from .qa import run_qa
@@ -154,18 +165,32 @@ class Converter:
         complex_mask = np.zeros((h, w), np.uint8)
         n_flat = n_complex = 0
 
+        active_covers = list(page.cover_rects_px or [])
+        drop_native: set[int] = set()
         if page.needs_ocr:
             recognized = []
             for raw in self.ocr.recognize(image):
                 recognized.extend(split_mixed_sizes(raw, image))
+            # 冗長パッチ図形の解消: 焼き込みテキストの上に同内容の不透明
+            # テキスト図形が重ねてある場合(編集不能への手当てパッチ)、
+            # 図形を落として焼き込み側を編集可能テキストとして復元する
+            active_covers, drop_native, rescued_lines = self._resolve_redundant_patches(
+                page, recognized)
+            if drop_native:
+                review.append({
+                    "text": "",
+                    "confidence": 1.0,
+                    "bbox": [0, 0, 0, 0],
+                    "reason": f"冗長な上書きパッチ図形を{len(drop_native)}件解消"
+                              "(焼き込みテキストを編集可能として復元)"})
             for line in recognized:
                 ink = measure_ink(image, line.bbox)
                 if ink is None:
                     continue
                 # 不透明カバー(持ち越し画像・塗り図形)に大半が隠れる行は、
                 # 原本で不可視のため復元も除去もしない(隠しテキストの蘇生防止)
-                if page.cover_rects_px and _covered_fraction(
-                        ink.ink_bbox, page.cover_rects_px) >= 0.6:
+                if (active_covers and id(line) not in rescued_lines
+                        and _covered_fraction(ink.ink_bbox, active_covers) >= 0.6):
                     continue
                 # アーチ状・波状の変形テキストは直線ボックスで再現できないため
                 # 画像のまま保持する(除去も復元もしない)
@@ -195,10 +220,11 @@ class Converter:
                 style = refine_line(text, ink, image, self.candidates,
                                     pt_per_px, settings, size_scale_hint=size_hint,
                                     det_height_px=line.bbox[3] - line.bbox[1])
-                # 極性リトライ: 明るい帯の上の白文字等では「bbox内少数派」則が
-                # 外れ、バーの影を「暗い文字」と誤計測することがある。
-                # 照合が弱い場合のみ逆極性で計測し直し、NCCが良い方を採用する。
-                if style is None or (style.ncc or 0) < 0.35:
+                # 極性リトライ: 明るい帯・発光オーブの上の白文字等では
+                # 「bbox内少数派」則が外れ、影を「暗い文字」と誤計測することが
+                # ある。照合が弱い場合は逆極性で計測し直し、NCCが明確に良い方を
+                # 採用する(0.02のマージンは同点時の解フリップ防止)。
+                if style is None or (style.ncc or 0) < 0.45:
                     ink_alt = measure_ink(image, line.bbox,
                                           force_polarity=not ink.text_brighter)
                     if ink_alt is not None:
@@ -207,7 +233,7 @@ class Converter:
                             pt_per_px, settings, size_scale_hint=size_hint,
                             det_height_px=line.bbox[3] - line.bbox[1])
                         if style_alt is not None and (style_alt.ncc or 0) > (
-                                (style.ncc or 0) if style else -1.0):
+                                ((style.ncc or 0) + 0.02) if style else -1.0):
                             ink, style = ink_alt, style_alt
                 if style is None:
                     continue
@@ -224,14 +250,26 @@ class Converter:
                 # かつ検出枠の高さが解決サイズの2倍を超える場合はアーチ状等の
                 # 装飾文字(is_warpedが背景ノイズで拾えないケースの受け皿)。
                 # 直線ボックスでは再現できないため画像のまま保持する。
-                det_h = line.bbox[3] - line.bbox[1]
-                size_px_solved = style.size_pt / pt_per_px
-                if style.ncc < 0.15 and (det_h > size_px_solved * 2.0
-                                          or line.confidence < 0.80):
+                # 照合不成立の保持: 両極性を試しても相関が0.22に届かない行は、
+                # グロー・グレア・変形などで「そのフォント描画では画像を説明
+                # できない」状態。誤ったサイズ・位置で再構成すると枠を突き破る
+                # ため、視覚的完全性を優先して画像のまま保持する(要確認)。
+                if (style.ncc or 0) < 0.22:
                     review.append({"text": text,
                                    "confidence": round(line.confidence, 3),
                                    "bbox": [round(v, 1) for v in line.bbox],
-                                   "reason": "曲線・変形テキスト(画像のまま保持)"})
+                                   "reason": "照合不成立・変形の疑い(画像のまま保持)"})
+                    continue
+                # 認識テキストがインクを説明できない行(解決アドバンスが検出
+                # インク幅の55%未満)は誤読の疑いが強い(立体・メタリック等の
+                # 特殊タイトルの典型)。誤テキストでの再構成はレイアウト破壊に
+                # なるため、信頼度か相関も弱い場合は画像のまま保持する。
+                if (style.advance_w_px < ink.ink_w * 0.55
+                        and (line.confidence < 0.80 or (style.ncc or 0) < 0.5)):
+                    review.append({"text": text,
+                                   "confidence": round(line.confidence, 3),
+                                   "bbox": [round(v, 1) for v in line.bbox],
+                                   "reason": "認識不能テキスト(画像のまま保持)"})
                     continue
                 solved_lines.append(
                     SolvedLine(text=text, style=style, ink_bbox=ink.ink_bbox,
@@ -274,7 +312,7 @@ class Converter:
                         complex_mask, removal.complex_mask(image, ink, settings))
                     n_complex += 1
 
-        blocks = group_lines(solved_lines, w)
+        blocks = group_lines(solved_lines, w, pt_per_px)
         self._unify_blocks(blocks, image, pt_per_px)
         self._measure_color_runs(blocks, image, pt_per_px)
 
@@ -305,7 +343,9 @@ class Converter:
         (page_dir / "layout.json").write_text(
             json.dumps(layout, ensure_ascii=False, indent=1), encoding="utf-8")
 
-        for index, xml in enumerate(page.native_xml):
+        kept_native = [xml for index, xml in enumerate(page.native_xml)
+                       if index not in drop_native]
+        for index, xml in enumerate(kept_native):
             (page_dir / f"native_{index:02d}.xml").write_text(xml, encoding="utf-8")
 
         for index, overlay in enumerate(page.overlay_images):
@@ -326,7 +366,7 @@ class Converter:
             "n_complex": n_complex,
             "lama_pending": lama_pending,
             "overlay_images": overlay_images,
-            "native_xml": [f"native_{i:02d}.xml" for i in range(len(page.native_xml))],
+            "native_xml": [f"native_{i:02d}.xml" for i in range(len(kept_native))],
             "slide_emu": list(page.slide_emu) if page.slide_emu else None,
             "n_review": len(review),
             "cache": "fresh",
@@ -362,6 +402,122 @@ class Converter:
                         line.style = fallback
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def _carry_theme(input_pptx: Path, output_pptx: Path) -> None:
+        """入力PPTXのテーマ(theme1.xml)を出力へコピーする。"""
+        import zipfile
+        try:
+            with zipfile.ZipFile(input_pptx) as zin:
+                names = [n for n in zin.namelist()
+                         if n.startswith("ppt/theme/theme") and n.endswith(".xml")]
+                if not names:
+                    return
+                theme_xml = zin.read(sorted(names)[0])
+        except Exception:
+            return
+        import os
+        import tempfile
+        fd, tmp = tempfile.mkstemp(suffix=".pptx",
+                                   dir=str(output_pptx.parent))
+        os.close(fd)
+        try:
+            with zipfile.ZipFile(output_pptx) as zsrc, \
+                    zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zdst:
+                for item in zsrc.infolist():
+                    data = zsrc.read(item.filename)
+                    if (item.filename.startswith("ppt/theme/theme")
+                            and item.filename.endswith(".xml")):
+                        data = theme_xml
+                    zdst.writestr(item, data)
+            os.replace(tmp, output_pptx)
+        except Exception:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+
+    def _resolve_redundant_patches(self, page, recognized):
+        """焼き込みテキストへの「上書きパッチ図形」を検出して解消する。
+
+        「ほぼ画像」のPPTXでは、作者が編集不能な焼き込みテキストの上に
+        不透明塗りのテキストボックスを重ねて手当てしていることがある。
+        パッチの文字列と、その下に隠れた焼き込みテキストのOCR結果が
+        実質同一なら、パッチは「編集可能化の代用」であり本ツールが
+        焼き込み側を編集可能にすれば冗長になる。図形を落とし、カバーも
+        無効化して焼き込み側を通常どおり復元する(パッチ図形は描画系に
+        よって折り返し・塗り範囲が変わり、はみ出しの原因にもなる)。
+        文字列が実質異なる場合は作者の意図的な差し替えなので保持する。
+        戻り値: (有効なカバー矩形, 落とすnative_xml添字, 復元対象に救済する行id)
+        """
+        covers = list(page.cover_rects_px or [])
+        cover_shapes = getattr(page, "cover_shapes", None) or []
+        if not cover_shapes or not recognized:
+            return covers, set(), set()
+        import difflib
+        import re
+        strip = re.compile(r"[^0-9A-Za-z一-鿿ぁ-ゖァ-ヺー々〆]")
+
+        def norm(t: str) -> str:
+            return strip.sub("", unicodedata.normalize("NFKC", t))
+
+        matched: dict[int, int] = {}
+        sp_total: dict[int, int] = {}
+        matched_lines: dict[int, list] = {}
+        for cov in cover_shapes:
+            ni = cov.get("native_index")
+            if ni is None:
+                continue
+            sp_total[ni] = max(sp_total.get(ni, 1), cov.get("group_sp_total", 1))
+            typed = norm(cov.get("text") or "")
+            if len(typed) < 4:
+                continue
+            # 焼き込み行がパッチ矩形の外へ続く場合(長い1行の左半分だけを
+            # パッチが覆い、残りを別のカバーが覆う等)があるため、候補は
+            # 「縦に矩形へ収まり(60%以上)、横に重なる」行とし、
+            # 採否はテキストの類似・包含の照合に委ねる
+            rx0, ry0, rx1, ry1 = cov["rect"]
+
+            def _in_band(l) -> bool:
+                x0, y0, x1, y1 = l.bbox
+                y_ov = min(y1, ry1) - max(y0, ry0)
+                x_ov = min(x1, rx1) - max(x0, rx0)
+                return y_ov >= 0.6 * max(y1 - y0, 1.0) and x_ov > 0
+
+            under = [l for l in recognized if _in_band(l)]
+            if not under:
+                continue
+            under.sort(key=lambda l: (l.bbox[1], l.bbox[0]))
+            baked = norm("".join(l.text for l in under))
+            if not baked:
+                continue
+            similar = difflib.SequenceMatcher(None, baked, typed).ratio() >= 0.75
+            contained = len(typed) >= 8 and typed in baked
+            if similar or contained:
+                matched[ni] = matched.get(ni, 0) + 1
+                matched_lines.setdefault(ni, []).extend(under)
+        # グループ内の全図形が「一致したテキストパッチ」の場合のみ丸ごと落とす
+        # (アイコン・罫線等を含むグループを巻き添えにしない安全条件)
+        drop = {ni for ni, n in matched.items() if n >= sp_total.get(ni, 10 ** 9)}
+        # 可視性条件: パッチを落とした後、焼き込み行が他のカバー(白カード等)に
+        # まだ大きく隠れるなら、そのパッチは「その場の置換」ではなく
+        # 「別位置への再レイアウト」(作者の意図的な作り直し)なので保持する。
+        # 落とすと断片だけが露出してレイアウトが壊れるため。
+        if drop:
+            for ni in sorted(drop):
+                own_rects = {tuple(c["rect"]) for c in cover_shapes
+                             if c.get("native_index") == ni}
+                others = [r for r in covers if tuple(r) not in own_rects]
+                for l in matched_lines.get(ni, []):
+                    if others and _covered_fraction(tuple(l.bbox), others) > 0.4:
+                        drop.discard(ni)
+                        break
+        rescued: set[int] = set()
+        if drop:
+            dropped_rects = {tuple(c["rect"]) for c in cover_shapes
+                             if c.get("native_index") in drop}
+            covers = [r for r in covers if tuple(r) not in dropped_rects]
+            for ni in drop:
+                rescued.update(id(l) for l in matched_lines.get(ni, []))
+        return covers, drop, rescued
+
     def _restore_layout_spaces(self, text, style, ink, image, line, pt_per_px):
         """OCR単語ボックスに現れないスペース欠落をレイアウト検証で復元する。
 
@@ -618,6 +774,37 @@ class Converter:
             shutil.copy2(page_dir / "lama_mask.png", mask_dir / f"{number:03d}.png")
         print(f"LaMa: {len(numbers)}ページを一括修復中...", flush=True)
         removal.run_lama_batch(image_dir, mask_dir, out_dir, self.settings)
+        # 除去の自己検査: 修復結果に文字の残像(ゴースト)が残る領域を実測し、
+        # マスクを膨張させて2回目の修復をかける(グレア上の文字・強コントラスト
+        # 文字は1回で消え切らないことがある。必要な領域だけを再修復)。
+        r2 = staging / "round2"
+        r2_img, r2_mask, r2_out = r2 / "images", r2 / "masks", r2 / "out"
+        retry_numbers: list[int] = []
+        for number in numbers:
+            result = out_dir / f"{number:03d}.png"
+            page_dir = pages_dir / f"{number:03d}"
+            if not result.is_file():
+                continue
+            src = cv2.imread(str(page_dir / "lama_input.png"))
+            out = cv2.imread(str(result))
+            mask = cv2.imread(str(page_dir / "lama_mask.png"), cv2.IMREAD_GRAYSCALE)
+            if src is None or out is None or mask is None:
+                continue
+            ghost = removal.ghost_mask(src, out, mask)
+            if ghost is None:
+                continue
+            for directory in (r2_img, r2_mask, r2_out):
+                directory.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(r2_img / f"{number:03d}.png"), out)
+            cv2.imwrite(str(r2_mask / f"{number:03d}.png"), ghost)
+            retry_numbers.append(number)
+        if retry_numbers:
+            print(f"LaMa: 残像検出 {len(retry_numbers)}ページを再修復中...", flush=True)
+            removal.run_lama_batch(r2_img, r2_mask, r2_out, self.settings)
+            for number in retry_numbers:
+                res2 = r2_out / f"{number:03d}.png"
+                if res2.is_file():
+                    shutil.copy2(res2, out_dir / f"{number:03d}.png")
         for number in numbers:
             result = out_dir / f"{number:03d}.png"
             page_dir = pages_dir / f"{number:03d}"
