@@ -58,7 +58,7 @@ def _hash_inputs(paths: list[Path], settings: Settings) -> str:
         "inpaint": settings.inpaint,
         "render_scale": settings.render_scale,
         "non_portable_penalty": settings.non_portable_penalty,
-        "version": 18,
+        "version": 20,
     }
     digest.update(json.dumps(relevant, sort_keys=True).encode())
     return digest.hexdigest()[:16]
@@ -303,6 +303,19 @@ class Converter:
                                    "bbox": [round(v, 1) for v in line.bbox],
                                    "reason": "認識不能テキスト(画像のまま保持)"})
                     continue
+                # 行頭・行末の未認識インク検査: 検出枠のすぐ外側に本文と
+                # 同色調のインクが続く場合、先頭/末尾の文字の取りこぼしの
+                # 疑い(例:「(一般社団法人…」の「(一」だけ検出漏れ)。
+                # 見た目は焼き込みが残って自然に繋がるが、テキスト編集時に
+                # 欠けが分かるようreviewへ記録する。
+                edge_note = self._unrecognized_edge_ink(
+                    image, ink, style, pt_per_px,
+                    [l2.bbox for l2 in recognized if l2 is not line])
+                if edge_note:
+                    review.append({"text": text,
+                                   "confidence": round(line.confidence, 3),
+                                   "bbox": [round(v, 1) for v in line.bbox],
+                                   "reason": edge_note})
                 solved_lines.append(
                     SolvedLine(text=text, style=style, ink_bbox=ink.ink_bbox,
                                confidence=line.confidence, source="ocr", ink=ink,
@@ -319,17 +332,6 @@ class Converter:
                     review.append({"text": text, "confidence": round(line.confidence, 3),
                                    "bbox": [round(v, 1) for v in line.bbox],
                                    "reason": "照合失敗(サイズ・位置は推定値)"})
-                kind = removal.classify_region(image, ink, settings)
-                if settings.inpaint == "flat":
-                    kind = "flat"
-                if kind == "flat":
-                    flat_masks.append(removal.region_mask(ink, (h, w)))
-                    n_flat += 1
-                else:
-                    complex_mask = np.maximum(
-                        complex_mask, removal.complex_mask(image, ink, settings))
-                    n_complex += 1
-
         # PDFレンダリングページの可視テキストは画像に焼き込まれているので除去対象
         if page.source_kind == "pdf-render":
             for overlay in page.overlay_texts:
@@ -345,6 +347,33 @@ class Converter:
                     n_complex += 1
 
         self._harmonize_sizes(solved_lines, image, pt_per_px)
+        # 最終の画像保持判定と除去マスクの確定:
+        # 調和・統一のロック再解決で照合が後から劣化する行があるため、
+        # 「画像のまま保持」の判定は最終NCCで行い、除去マスクは
+        # 生き残った行だけに対して確定する(保持行のインクを消さない)。
+        surviving: list[SolvedLine] = []
+        for sl in solved_lines:
+            if sl.source == "ocr" and (sl.style.ncc or 0) < 0.22:
+                review.append({"text": sl.text,
+                               "confidence": round(sl.confidence, 3),
+                               "bbox": [round(v, 1) for v in sl.ink_bbox],
+                               "reason": "照合不成立・変形の疑い(画像のまま保持)"})
+                continue
+            surviving.append(sl)
+        solved_lines = surviving
+        for sl in solved_lines:
+            if sl.source != "ocr" or sl.ink is None:
+                continue
+            kind = removal.classify_region(image, sl.ink, settings)
+            if settings.inpaint == "flat":
+                kind = "flat"
+            if kind == "flat":
+                flat_masks.append(removal.region_mask(sl.ink, (h, w)))
+                n_flat += 1
+            else:
+                complex_mask = np.maximum(
+                    complex_mask, removal.complex_mask(image, sl.ink, settings))
+                n_complex += 1
         blocks = group_lines(solved_lines, w, pt_per_px)
         self._unify_blocks(blocks, image, pt_per_px)
         self._measure_color_runs(blocks, image, pt_per_px)
@@ -551,6 +580,45 @@ class Converter:
                 rescued.update(id(l) for l in matched_lines.get(ni, []))
         return covers, drop, rescued
 
+    @staticmethod
+    def _unrecognized_edge_ink(image, ink, style, pt_per_px: float,
+                               other_bboxes) -> str | None:
+        """行の左右すぐ外に本文と同色調のインクが残っていないか実測する。
+
+        OCRが行頭・行末の文字(細い「一」や括弧等)を検出枠から取りこぼすと、
+        その文字は焼き込みのまま残り、再構成テキストは欠けた文字列になる。
+        合成上は自然に繋がって見えるため、編集時に気づけるようreviewに載せる。
+        別の検出行が隣接する側(表の隣セル等)は正常なので検査しない。
+        """
+        em = style.size_pt / pt_per_px
+        x0, y0, x1, y1 = ink.ink_bbox
+        h, w = image.shape[:2]
+        tgt = np.asarray(ink.color, np.float32)
+        notes = []
+        for side, ax0, ax1 in (("行頭", int(x0 - 1.6 * em), int(x0 - 0.25 * em)),
+                               ("行末", int(x1 + 0.25 * em), int(x1 + 1.6 * em))):
+            ax0 = max(0, ax0)
+            ax1 = min(w, ax1)
+            if ax1 - ax0 < 3:
+                continue
+            # 隣に別の検出行があるならそのインク(正常)なのでスキップ
+            overlapped = False
+            for bx0, by0, bx1, by1 in other_bboxes:
+                if (min(ax1, bx1) - max(ax0, bx0) > 0
+                        and min(y1 + 1, by1) - max(y0, by0) > 0):
+                    overlapped = True
+                    break
+            if overlapped:
+                continue
+            strip = cv2.cvtColor(image[max(0, y0):min(h, y1 + 1), ax0:ax1],
+                                 cv2.COLOR_BGR2RGB).astype(np.float32)
+            close = np.linalg.norm(strip - tgt, axis=2) < 60
+            if int(close.sum()) >= max(20, int(0.04 * em * em)):
+                notes.append(side)
+        if notes:
+            return f"{'・'.join(notes)}に未認識のインクが残存(文字の取りこぼしの疑い)"
+        return None
+
     def _harmonize_sizes(self, solved_lines, image, pt_per_px: float) -> None:
         """ページ内で同じ設計サイズとみられる行のサイズ揺れを統一する。
 
@@ -608,7 +676,10 @@ class Converter:
                 refined = refine_by_template(
                     image, m.text, m.style.face, m.style, m.ink,
                     pt_per_px, self.settings, size_lock_px=lock_px)
-                if refined is not None and _plausible(refined[0], m):
+                # スナップ採用の条件: 幅サニティに加え、照合が大きく劣化
+                # しないこと(劣化した解は後段の画像保持判定もすり抜けるため)
+                if (refined is not None and _plausible(refined[0], m)
+                        and refined[1] >= min(0.30, (m.style.ncc or 0) * 0.8)):
                     m.style = refined[0]
                 elif refined is None:
                     res = resolve_with(m.text, m.ink, m.style.face, target_pt,
