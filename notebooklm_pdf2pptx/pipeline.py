@@ -58,7 +58,7 @@ def _hash_inputs(paths: list[Path], settings: Settings) -> str:
         "inpaint": settings.inpaint,
         "render_scale": settings.render_scale,
         "non_portable_penalty": settings.non_portable_penalty,
-        "version": 20,
+        "version": 21,
     }
     digest.update(json.dumps(relevant, sort_keys=True).encode())
     return digest.hexdigest()[:16]
@@ -192,14 +192,10 @@ class Converter:
                 if (active_covers and id(line) not in rescued_lines
                         and _covered_fraction(ink.ink_bbox, active_covers) >= 0.6):
                     continue
-                # アーチ状・波状の変形テキストは直線ボックスで再現できないため
-                # 画像のまま保持する(除去も復元もしない)
-                if is_warped(line, image):
-                    review.append({"text": line.text,
-                                   "confidence": round(line.confidence, 3),
-                                   "bbox": [round(v, 1) for v in line.bbox],
-                                   "reason": "曲線・変形テキスト(画像のまま保持)"})
-                    continue
+                # アーチ状・波状の変形テキストの「疑い」フラグ。列中心の振れは
+                # 背景ノイズや隣接装飾でも出るため、ここでは確定させず、
+                # 解いた後に「直線テンプレートで相関が出るか」で裁定する
+                warped = is_warped(line, image)
                 text = restore_spaces(line, image)
                 # 欧文主体の行はNFKC正規化(全角コロン・括弧等→ASCII)。
                 # OCRが全角記号を返すと欧文フォントの未収録グリフになり、
@@ -269,6 +265,15 @@ class Converter:
                                     (style_b.ncc or 0) >= 0.30
                                     and (style_b.ncc or 0) >= (style.ncc or 0) * 0.7):
                                 ink, style = ink_b, style_b
+                # 変形疑いの裁定: 直線テンプレートで十分な相関(≥0.5)が出るなら
+                # 実際は直線テキスト(is_warpedの誤検知)なので通常どおり再構成。
+                # 相関が出ない場合のみ本物の変形として画像のまま保持する。
+                if warped and (style.ncc or 0) < 0.50:
+                    review.append({"text": text,
+                                   "confidence": round(line.confidence, 3),
+                                   "bbox": [round(v, 1) for v in line.bbox],
+                                   "reason": "曲線・変形テキスト(画像のまま保持)"})
+                    continue
                 # 行頭・行末の紛らわしい字形(装飾の波ダッシュ等)をNCCで裁定
                 text, style = arbitrate_edge_confusables(
                     image, text, style, ink, pt_per_px, settings)
@@ -282,11 +287,15 @@ class Converter:
                 # かつ検出枠の高さが解決サイズの2倍を超える場合はアーチ状等の
                 # 装飾文字(is_warpedが背景ノイズで拾えないケースの受け皿)。
                 # 直線ボックスでは再現できないため画像のまま保持する。
-                # 照合不成立の保持: 両極性を試しても相関が0.22に届かない行は、
+                # 照合不成立の保持: 両極性を試しても相関が届かない行は、
                 # グロー・グレア・変形などで「そのフォント描画では画像を説明
                 # できない」状態。誤ったサイズ・位置で再構成すると枠を突き破る
                 # ため、視覚的完全性を優先して画像のまま保持する(要確認)。
-                if (style.ncc or 0) < 0.22:
+                # ただし写真等の複雑背景上の小さい文字は相関が構造的に低く
+                # 出るため、幾何が健全なら緩い閾値で受理する(ヘルパ参照)。
+                if not self._acceptable_solution(
+                        style, ink, line.confidence,
+                        line.bbox[3] - line.bbox[1], pt_per_px):
                     review.append({"text": text,
                                    "confidence": round(line.confidence, 3),
                                    "bbox": [round(v, 1) for v in line.bbox],
@@ -353,7 +362,8 @@ class Converter:
         # 生き残った行だけに対して確定する(保持行のインクを消さない)。
         surviving: list[SolvedLine] = []
         for sl in solved_lines:
-            if sl.source == "ocr" and (sl.style.ncc or 0) < 0.22:
+            if sl.source == "ocr" and not self._acceptable_solution(
+                    sl.style, sl.ink, sl.confidence, None, pt_per_px):
                 review.append({"text": sl.text,
                                "confidence": round(sl.confidence, 3),
                                "bbox": [round(v, 1) for v in sl.ink_bbox],
@@ -579,6 +589,32 @@ class Converter:
             for ni in drop:
                 rescued.update(id(l) for l in matched_lines.get(ni, []))
         return covers, drop, rescued
+
+    @staticmethod
+    def _acceptable_solution(style, ink, confidence: float,
+                             det_h: float | None, pt_per_px: float) -> bool:
+        """解を採用してよいかの最終判定(満たさない行は画像のまま保持)。
+
+        原則はNCC≥0.22。ただし写真等の複雑背景上の小さい文字は、正しい解でも
+        背景テクスチャに相関が薄められて低NCCになりがちなので、
+        「高信頼(≥0.97)・小サイズ(em≤30px)・幅とサイズの幾何が健全」を
+        すべて満たす場合に限り0.15まで受理する。誤読・過大解の事故は
+        幾何条件(送り幅≈インク幅、em≤検出枠高)が防ぐ。
+        """
+        ncc = style.ncc or 0.0
+        if ncc >= 0.22:
+            return True
+        if ncc < 0.15 or confidence < 0.97 or ink is None:
+            return False
+        em_px = style.size_pt / pt_per_px
+        if em_px > 30:
+            return False
+        if not (ink.ink_w * 0.80 <= style.advance_w_px
+                <= ink.ink_w * 1.20 + em_px):
+            return False
+        if det_h is not None and em_px > det_h:
+            return False
+        return em_px <= ink.ink_h * 1.45
 
     @staticmethod
     def _unrecognized_edge_ink(image, ink, style, pt_per_px: float,
