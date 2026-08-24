@@ -698,14 +698,20 @@ class Converter:
             dirty = False
             for e in entries:
                 before, after = e["before"], e["after"]
+                hit = False
                 for block in lay.get("blocks", []):
                     texts = [ln["text"] for ln in block["lines"]]
                     if texts == before:
                         for ln, new in zip(block["lines"], after):
                             ln["text"] = new
                         dirty = True
+                        hit = True
                         n_applied += 1
                         break
+                if not hit:
+                    # 指し先がネイティブ図形だった修正: native_*.xmlへリプレイ
+                    if self._replay_to_native(lay_path.parent, before, after):
+                        n_applied += 1
                 changed = {old for old, new in zip(before, after) if old != new}
                 for r in lay.get("review", []):
                     if r.get("text") in changed and not r.get("resolved"):
@@ -716,6 +722,41 @@ class Converter:
                     json.dumps(lay, ensure_ascii=False, indent=1), "utf-8")
         if n_applied:
             print(f"修正台帳: {n_applied}件をリプレイ適用", flush=True)
+
+    @staticmethod
+    def _replay_to_native(page_dir: Path, before: list[str],
+                          after: list[str]) -> bool:
+        """台帳の修正をnative_*.xmlの段落へリプレイする(冪等)。"""
+        from lxml import etree
+        A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+        for xml_path in sorted(page_dir.glob("native_*.xml")):
+            try:
+                root = etree.fromstring(xml_path.read_bytes())
+            except Exception:
+                continue
+            dirty = False
+            for para in root.iter(A + "p"):
+                ts = list(para.iter(A + "t"))
+                joined = "".join(t.text or "" for t in ts)
+                for old, new in zip(before, after):
+                    if old == new or joined != old:
+                        continue
+                    if len(new) == len(old):
+                        pos = 0
+                        for t in ts:
+                            n = len(t.text or "")
+                            t.text = new[pos:pos + n]
+                            pos += n
+                    elif ts:
+                        ts[0].text = new
+                        for t in ts[1:]:
+                            t.text = ""
+                    dirty = True
+            if dirty:
+                xml_path.write_text(
+                    etree.tostring(root, encoding="unicode"), "utf-8")
+                return True
+        return False
 
     def _fix_native_text(self, xml_list):
         """持ち越しネイティブ図形内のテキストにも文字化け修正を適用する。
