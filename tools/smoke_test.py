@@ -42,11 +42,17 @@ def main() -> None:
             if shape.left + shape.width > slide_w * 1.08:
                 problems.append(f"slide{index}: 右はみ出し {shape.name!r}")
             for paragraph in shape.text_frame.paragraphs:
-                ppr = paragraph._p.find(
-                    "{http://schemas.openxmlformats.org/drawingml/2006/main}pPr")
-                if ppr is None or ppr.find(
-                    "{http://schemas.openxmlformats.org/drawingml/2006/main}lnSpc"
-                ) is None:
+                # 本ツール生成の段落のみ検査する。生成ランは必ず kern="10000" を
+                # 持つ(カーニング無効化マーカー)。持ち越しネイティブ図形や、
+                # 出力を人間がPowerPointで編集して増えた段落は対象外。
+                a_ns = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+                ours = any(r._r.find(a_ns + "rPr") is not None
+                           and r._r.find(a_ns + "rPr").get("kern") == "10000"
+                           for r in paragraph.runs)
+                if not ours:
+                    continue
+                ppr = paragraph._p.find(a_ns + "pPr")
+                if ppr is None or ppr.find(a_ns + "lnSpc") is None:
                     problems.append(f"slide{index}: lnSpc未設定 {shape.name!r}")
                 for run in paragraph.runs:
                     if run.font.size is None:

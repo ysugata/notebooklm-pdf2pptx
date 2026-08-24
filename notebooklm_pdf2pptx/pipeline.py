@@ -58,7 +58,7 @@ def _hash_inputs(paths: list[Path], settings: Settings) -> str:
         "inpaint": settings.inpaint,
         "render_scale": settings.render_scale,
         "non_portable_penalty": settings.non_portable_penalty,
-        "version": 23,
+        "version": 24,
     }
     digest.update(json.dumps(relevant, sort_keys=True).encode())
     return digest.hexdigest()[:16]
@@ -197,6 +197,17 @@ class Converter:
                     "reason": f"冗長な上書きパッチ図形を{len(drop_native)}件解消"
                               "(焼き込みテキストを編集可能として復元)"})
             for line in recognized:
+                # 全面誤検出ガード: 検出枠がキャンバスの過半を縦横とも覆う
+                # 「行」は実在しない(写真・図版全体をOCRが1行と誤検出した
+                # アーティファクト)。復元も除去もしない(除去すると全面
+                # インペイントで背景を破壊してしまう)。
+                if ((line.bbox[2] - line.bbox[0]) > w * 0.5
+                        and (line.bbox[3] - line.bbox[1]) > h * 0.5):
+                    review.append({"text": line.text,
+                                   "confidence": round(line.confidence, 3),
+                                   "bbox": [round(v, 1) for v in line.bbox],
+                                   "reason": "全面誤検出(無視)"})
+                    continue
                 ink = measure_ink(image, line.bbox)
                 if ink is None:
                     continue
