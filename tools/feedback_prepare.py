@@ -257,6 +257,7 @@ def main() -> int:
     payload = {
         "source": str(args.pptx),
         "source_sha256": hashlib.sha256(args.pptx.read_bytes()).hexdigest(),
+        "work_dir": str(args.work_dir) if args.work_dir else None,
         "tasks": tasks,
     }
     body = json.dumps(payload, ensure_ascii=False, indent=1)

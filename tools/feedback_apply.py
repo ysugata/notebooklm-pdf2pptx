@@ -182,6 +182,22 @@ def main() -> int:
             continue
         if status == "skip":
             skipped += 1
+            # 「正しいと確認済み」もキャッシュのreviewへ記録し、次回の
+            # タスク抽出で再提示されないようにする
+            if args.work_dir is not None and t.get("target"):
+                lay_path = (args.work_dir / "pages" / f"{t['slide']:03d}"
+                            / "layout.json")
+                if lay_path.is_file():
+                    lay = json.loads(lay_path.read_text("utf-8"))
+                    texts = set(t["target"]["paragraphs"])
+                    dirty = False
+                    for r in lay.get("review", []):
+                        if r.get("text") in texts and not r.get("resolved"):
+                            r["resolved"] = "confirmed"
+                            dirty = True
+                    if dirty:
+                        lay_path.write_text(
+                            json.dumps(lay, ensure_ascii=False, indent=1), "utf-8")
             log.append({"id": aid, "result": "skip"})
             continue
         if status == "needs_human" or t["class"] == "C":

@@ -49,3 +49,15 @@ description: 編集可能化したPPTXに残る文字化け(AI崩れ字の誤読
 - PPTXを直接編集しない。適用は必ず feedback_apply.py 経由
 - タスク数が多い場合は数十件ずつ画像確認→適用を繰り返してよい
   (applyは同一図形への追加適用に対応している)
+
+
+## 回答ファイルの自動取り込み
+
+依頼者がレポートの「回答をファイルに保存」で作った answers_*.txt を
+inbox/(または ~/Downloads)に置いたら:
+```
+.venv/bin/python tools/answers_ingest.py <tasks.json> --apply
+```
+がハッシュ照合→answers.json化→適用まで自動実行する。
+適用後は必ず prepare→report を再生成する(古いtasksはハッシュ不一致で
+適用拒否される。残った要判断だけが新しいレポートに載る)。

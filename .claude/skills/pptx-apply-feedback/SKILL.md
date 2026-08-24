@@ -42,3 +42,15 @@ description: 吹き出し等の注記(修正指示)が付いたPPTXを受け取�
 
 - 自由裁量は answers.json の中身だけ。PPTX/XMLの直接編集は禁止
 - apply はハッシュ証跡・本文不変性を検証する。拒否されたら手順を疑う
+
+
+## 回答ファイルの自動取り込み
+
+依頼者がレポートの「回答をファイルに保存」で作った answers_*.txt を
+inbox/(または ~/Downloads)に置いたら:
+```
+.venv/bin/python tools/answers_ingest.py <tasks.json> --apply
+```
+がハッシュ照合→answers.json化→適用まで自動実行する。
+適用後は必ず prepare→report を再生成する(古いtasksはハッシュ不一致で
+適用拒否される。残った要判断だけが新しいレポートに載る)。

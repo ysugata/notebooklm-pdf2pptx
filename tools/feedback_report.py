@@ -104,26 +104,47 @@ summary{cursor:pointer;font-weight:bold}</style>"""]
                      'style="width:70%;padding:4px;font-size:1em" '
                      'placeholder="正しい文言 / そのまま / 消す / 保留"></div></div>')
     if buckets["needs_human"]:
-        parts.append('''<div class="card"><button onclick="collect()"
+        tasks_sha = None
+        sha_file = base / "tasks.sha256"
+        if sha_file.is_file():
+            tasks_sha = sha_file.read_text("utf-8").strip()
+        parts.append(f'''<div class="card">
+ <button onclick="collect(false)"
  style="font-size:1.05em;padding:8px 20px;cursor:pointer">回答をまとめてコピー</button>
+ <button onclick="collect(true)"
+ style="font-size:1.05em;padding:8px 20px;cursor:pointer;margin-left:8px">回答をファイルに保存</button>
  <span id="copied" style="color:#2e7d4f;margin-left:8px"></span>
  <textarea id="out" style="width:100%;height:120px;margin-top:8px"
-  placeholder="ここに回答テキストが生成されます"></textarea></div>
+  placeholder="ここに回答テキストが生成されます"></textarea>
+ <p style="color:#888;font-size:.85em">保存したファイル(answers_*.txt)は inbox/ や
+ 共有フォルダに置くだけで、次回の実行時に自動で取り込まれ適用されます。</p></div>
 <script>
-function collect(){
+const TASKS_SHA = {json.dumps(tasks_sha)};
+function collect(save){{
   const lines = [];
-  document.querySelectorAll("input.ans").forEach(i=>{
+  document.querySelectorAll("input.ans").forEach(i=>{{
     if(i.value.trim()) lines.push(i.dataset.id + ": " + i.value.trim());
-  });
-  const text = lines.join("\\n");
+  }});
+  let text = lines.join("\\n");
   const out = document.getElementById("out");
   out.value = text || "(未記入)";
-  out.select();
-  try{ navigator.clipboard.writeText(text);
-       document.getElementById("copied").textContent = "コピーしました"; }
-  catch(e){ document.execCommand("copy");
-       document.getElementById("copied").textContent = "選択済み(Cmd+Cでコピー)"; }
-}
+  if(!text) return;
+  if(TASKS_SHA) text = "# tasks_sha256: " + TASKS_SHA + "\\n" + text;
+  if(save){{
+    const blob = new Blob([text], {{type:"text/plain"}});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "answers_" + (TASKS_SHA ? TASKS_SHA.slice(0,8) : "session") + ".txt";
+    a.click();
+    document.getElementById("copied").textContent = "ファイルを保存しました";
+  }} else {{
+    out.select();
+    try{{ navigator.clipboard.writeText(text);
+         document.getElementById("copied").textContent = "コピーしました"; }}
+    catch(e){{ document.execCommand("copy");
+         document.getElementById("copied").textContent = "選択済み(Cmd+Cでコピー)"; }}
+  }}
+}}
 </script>''')
 
     parts.append("<h2>適用済み</h2>")

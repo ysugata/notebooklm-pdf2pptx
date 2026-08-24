@@ -75,3 +75,15 @@ CodexでもClaude Codeでも同じ。**エージェントの自由裁量は answ
 
 注記の慣習(図形タイプ・文言)が違う相手先の場合は `rules/annotations.yaml`
 を編集する。コードは触らない。
+
+
+## 回答ファイルの自動取り込み
+
+依頼者がレポートの「回答をファイルに保存」で作った answers_*.txt を
+inbox/(または ~/Downloads)に置いたら:
+```
+.venv/bin/python tools/answers_ingest.py <tasks.json> --apply
+```
+がハッシュ照合→answers.json化→適用まで自動実行する。
+適用後は必ず prepare→report を再生成する(古いtasksはハッシュ不一致で
+適用拒否される。残った要判断だけが新しいレポートに載る)。
