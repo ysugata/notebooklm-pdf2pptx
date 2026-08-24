@@ -14,7 +14,31 @@ NotebookLM系スライドの画像はAI生成特有の崩れ字を含み、OCR(5
 """
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
+
+# 人間/エージェントの修正回答から自動抽出された学習知識(git管理外)。
+# learned_confusables.json: {"pairs": [["塑","型"], ...]} 誤読字→正字(一方向)
+# learned_phrases.json:     {"化け文字列": "正しい文言", ...} 完全一致置換
+LEARNED_DIR = Path(__file__).resolve().parent.parent / "rules"
+
+
+def _load_learned() -> tuple[list[tuple[str, str]], dict[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    phrases: dict[str, str] = {}
+    try:
+        data = json.loads((LEARNED_DIR / "learned_confusables.json").read_text("utf-8"))
+        pairs = [(a, b) for a, b in data.get("pairs", []) if a != b]
+    except Exception:
+        pass
+    try:
+        phrases = {k: v for k, v in json.loads(
+            (LEARNED_DIR / "learned_phrases.json").read_text("utf-8")).items()
+            if k != v and len(k) >= 3}
+    except Exception:
+        pass
+    return pairs, phrases
 
 # --- 1. 異体字・簡体字・旧字体 → 日本標準字体 (無条件で安全な写像のみ) ---
 VARIANTS: dict[str, str] = {str(k): str(v) for k, v in {
@@ -105,6 +129,15 @@ class TextRepairer:
             self._tokenizer = Dictionary().create()
         except Exception:
             self._tokenizer = None
+        # 学習知識の取り込み: 形近字ペアは既存の安全ゲート(壊れ判定・
+        # 辞書治癒・品詞棄却)の中で候補に加わるだけなので、誤学習しても
+        # 単独では誤修正にならない。フレーズは完全一致のみ。
+        learned_pairs, self._phrases = _load_learned()
+        self._confusable = {k: v for k, v in _CONFUSABLE.items()}
+        for a, b in learned_pairs:
+            if _KANJI_CHAR.match(a) and _KANJI_CHAR.match(b):
+                if b not in self._confusable.get(a, ""):
+                    self._confusable[a] = self._confusable.get(a, "") + b
 
     @property
     def available(self) -> bool:
@@ -203,7 +236,7 @@ class TextRepairer:
             for pos, ch in enumerate(result):
                 if pos not in broken_pos or not _KANJI_CHAR.match(ch):
                     continue
-                for cand in _CONFUSABLE.get(ch, ""):
+                for cand in self._confusable.get(ch, ""):
                     # 修復先は漢字に限定(カタカナ等の形近字は照合用途のみ)
                     if not _KANJI_CHAR.match(cand):
                         continue
@@ -223,8 +256,17 @@ class TextRepairer:
         return result, fixes
 
     def apply(self, text: str) -> tuple[str, list[tuple[str, str]]]:
-        """正規化+修復をまとめて適用する。"""
-        text, fixes = normalize_variants(text)
+        """フレーズ学習→正規化→形近字修復の順に適用する。"""
+        fixes: list[tuple[str, str]] = []
+        # 学習済みフレーズ(過去に人間が確定した 化け文字列→正しい文言)の
+        # 完全一致置換。長いものから先に照合する。
+        if self._phrases:
+            for old_p in sorted(self._phrases, key=len, reverse=True):
+                if old_p in text:
+                    text = text.replace(old_p, self._phrases[old_p])
+                    fixes.append((old_p, self._phrases[old_p]))
+        text, more = normalize_variants(text)
+        fixes.extend(more)
         if self._tokenizer is not None:
             text, more = self.repair(text)
             fixes.extend(more)

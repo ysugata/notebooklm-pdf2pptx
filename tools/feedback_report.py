@@ -85,9 +85,14 @@ summary{cursor:pointer;font-weight:bold}</style>"""]
     parts.append(f"<p>適用 {c['applied']} / 正しいと確認 {c['skip']} / "
                  f"<b>要判断 {c['needs_human']}</b> / 拒否 {c['rejected']} / 未処理 {c['open']}</p>")
 
-    parts.append("<h2>要判断(全件・省略なし) — 正しい文言を教えてください</h2>")
+    parts.append("<h2>要判断(全件・省略なし) — 正しい文言を入力してください</h2>")
     if not buckets["needs_human"]:
         parts.append("<p>なし</p>")
+    else:
+        parts.append('<p>各欄に記入して最後の「回答をまとめてコピー」を押し、'
+                     "そのままチャットや依頼元へ貼り付けてください。"
+                     "分からない項目は空欄のままで構いません。"
+                     "「そのまま」「消す」「保留」という回答も使えます。</p>")
     for t, ans, res in buckets["needs_human"]:
         cur = " / ".join(t["target"]["paragraphs"]) if t.get("target") else "(図形未特定)"
         parts.append(f'<div class="card"><span class="id">{e(t["id"])} — スライド{t["slide"]}</span>'
@@ -95,7 +100,31 @@ summary{cursor:pointer;font-weight:bold}</style>"""]
                      f"{img_tag(base, t.get('source_crop') or t.get('crop'))}"
                      f"<div>現在のテキスト: <b>{e(cur)}</b></div>"
                      f"{('<div>備考: ' + e(t.get('note','')) + '</div>') if t.get('note') else ''}"
-                     '<div class="q">→ 正しい文言: ____________________</div></div>')
+                     f'<div class="q">→ 正しい文言: <input class="ans" data-id="{e(t["id"])}" '
+                     'style="width:70%;padding:4px;font-size:1em" '
+                     'placeholder="正しい文言 / そのまま / 消す / 保留"></div></div>')
+    if buckets["needs_human"]:
+        parts.append('''<div class="card"><button onclick="collect()"
+ style="font-size:1.05em;padding:8px 20px;cursor:pointer">回答をまとめてコピー</button>
+ <span id="copied" style="color:#2e7d4f;margin-left:8px"></span>
+ <textarea id="out" style="width:100%;height:120px;margin-top:8px"
+  placeholder="ここに回答テキストが生成されます"></textarea></div>
+<script>
+function collect(){
+  const lines = [];
+  document.querySelectorAll("input.ans").forEach(i=>{
+    if(i.value.trim()) lines.push(i.dataset.id + ": " + i.value.trim());
+  });
+  const text = lines.join("\\n");
+  const out = document.getElementById("out");
+  out.value = text || "(未記入)";
+  out.select();
+  try{ navigator.clipboard.writeText(text);
+       document.getElementById("copied").textContent = "コピーしました"; }
+  catch(e){ document.execCommand("copy");
+       document.getElementById("copied").textContent = "選択済み(Cmd+Cでコピー)"; }
+}
+</script>''')
 
     parts.append("<h2>適用済み</h2>")
     for t, ans, res in buckets["applied"]:

@@ -245,6 +245,46 @@ def main() -> int:
     prs.save(str(args.output))
     Presentation(str(args.output))  # 再読込検証(壊れたzipなら例外)
 
+    # --- 学習: 適用された修正から再利用可能な知識を自動抽出する ---
+    # 1文字の漢字置換 → 形近字ペア(以後どの資料でも安全ゲートつき候補になる)
+    # それ以外の変更 → フレーズ辞書(完全一致置換。同テンプレの資料で即修正)
+    learned_pairs: set[tuple[str, str]] = set()
+    learned_phrases: dict[str, str] = {}
+    kanji = __import__("re").compile(r"[一-鿿々]")
+    for row in log:
+        if row.get("result") != "applied":
+            continue
+        for old, new in zip(row.get("before", []), row.get("after", [])):
+            if old == new or not old.strip():
+                continue
+            if len(old) == len(new):
+                diffs = [(a, b) for a, b in zip(old, new) if a != b]
+                if all(kanji.match(a) and kanji.match(b) for a, b in diffs):
+                    learned_pairs.update(diffs)
+                    continue
+            if len(old) >= 4:
+                learned_phrases[old] = new
+    rules_dir = ROOT / "rules"
+    if learned_pairs or learned_phrases:
+        cpath = rules_dir / "learned_confusables.json"
+        existing_pairs = set()
+        if cpath.is_file():
+            existing_pairs = {tuple(p) for p in json.loads(
+                cpath.read_text("utf-8")).get("pairs", [])}
+        existing_pairs |= learned_pairs
+        cpath.write_text(json.dumps(
+            {"pairs": sorted([list(p) for p in existing_pairs])},
+            ensure_ascii=False, indent=1), "utf-8")
+        ppath = rules_dir / "learned_phrases.json"
+        phrases = {}
+        if ppath.is_file():
+            phrases = json.loads(ppath.read_text("utf-8"))
+        phrases.update(learned_phrases)
+        ppath.write_text(json.dumps(phrases, ensure_ascii=False, indent=1),
+                         "utf-8")
+        print(f"学習: 形近字ペア+{len(learned_pairs)} フレーズ+{len(learned_phrases)}"
+              f" (累計 ペア{len(existing_pairs)} / フレーズ{len(phrases)})")
+
     runs_dir = ROOT / "runs"
     runs_dir.mkdir(exist_ok=True)
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")

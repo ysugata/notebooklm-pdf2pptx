@@ -13,3 +13,4 @@ feedback_work/
 runs/
 inbox/
 outbox/
+rules/learned_*.json
