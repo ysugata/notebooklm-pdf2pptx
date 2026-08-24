@@ -28,6 +28,7 @@ sys.path.insert(0, str(ROOT))
 
 import yaml  # noqa: E402
 from pptx import Presentation  # noqa: E402
+from notebooklm_pdf2pptx.pages import _iter_shapes_deep, _shape_abs_bbox_emu  # noqa: E402
 
 
 def load_rules() -> dict:
@@ -72,9 +73,9 @@ def rect_distance(a, b) -> float:
     return (dx * dx + dy * dy) ** 0.5
 
 
-def callout_tip(shape):
-    """吹き出しの尻尾の先端座標(EMU)。wedge系はadj1/adj2が中心からの
-    比率(1/1000%)で先端位置を持つ。取れなければNone。"""
+def callout_tip(shape, rect):
+    """吹き出しの尻尾の先端座標(EMU、絶対)。wedge系はadj1/adj2が中心からの
+    比率で先端位置を持つ。取れなければNone。rectは図形の絶対座標。"""
     A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
     gds = {g.get("name"): g.get("fmla")
            for g in shape._element.findall(f".//{A}avLst/{A}gd")}
@@ -91,8 +92,9 @@ def callout_tip(shape):
     a1, a2 = val("adj1"), val("adj2")
     if a1 is None or a2 is None:
         return None
-    return ((shape.left or 0) + (shape.width or 0) * (0.5 + a1),
-            (shape.top or 0) + (shape.height or 0) * (0.5 + a2))
+    w = rect[2] - rect[0]
+    h = rect[3] - rect[1]
+    return (rect[0] + w * (0.5 + a1), rect[1] + h * (0.5 + a2))
 
 
 def point_rect_distance(pt, rect) -> float:
@@ -152,7 +154,12 @@ def main() -> int:
     tasks = []
     slides_with_tasks: set[int] = set()
     for idx, slide in enumerate(prs.slides, 1):
-        shapes = list(slide.shapes)
+        # グループ入れ子も含めて全図形を走査し、絶対座標を持たせる
+        deep = [(s, _shape_abs_bbox_emu(s, parents))
+                for s, parents in _iter_shapes_deep(slide.shapes)
+                if s.shape_type != 6]
+        abs_rect = {id(s): (b[0], b[1], b[0] + b[2], b[1] + b[3]) for s, b in deep}
+        shapes = [s for s, _b in deep]
         markers = [s for s in shapes if is_marker(s, rules)]
         texty = [s for s in shapes
                  if getattr(s, "has_text_frame", False)
@@ -162,13 +169,14 @@ def main() -> int:
             klass = classify(mtext, rules)
             # 指し先: 吹き出しの尻尾の先端が指すテキスト図形(先端座標が
             # 取れない図形は、注記に最も近いテキスト図形へフォールバック)
-            tip = callout_tip(mk)
+            tip = callout_tip(mk, abs_rect[id(mk)])
             if tip is not None and texty:
                 target = min(texty,
-                             key=lambda s: point_rect_distance(tip, rect_of(s)))
+                             key=lambda s: point_rect_distance(tip, abs_rect[id(s)]))
             else:
                 target = min(texty,
-                             key=lambda s: rect_distance(rect_of(mk), rect_of(s)),
+                             key=lambda s: rect_distance(abs_rect[id(mk)],
+                                                         abs_rect[id(s)]),
                              default=None)
             entry = {
                 "id": f"s{idx:03d}_m{mk.shape_id}",
@@ -180,6 +188,7 @@ def main() -> int:
                 "suggested": None,
                 "status": "open" if klass in ("A", "B") else "needs_human",
             }
+            rect = list(abs_rect[id(mk)])
             if target is not None:
                 paras = paragraphs_text(target)
                 entry["target"] = {
@@ -187,10 +196,14 @@ def main() -> int:
                     "name": target.name,
                     "paragraphs": paras,
                 }
+                tr = abs_rect[id(target)]
+                rect = [min(rect[0], tr[0]), min(rect[1], tr[1]),
+                        max(rect[2], tr[2]), max(rect[3], tr[3])]
                 if klass == "A" and repairer is not None and repairer.available:
                     fixed = [repairer.apply(p)[0] for p in paras]
                     if fixed != paras:
                         entry["suggested"] = fixed
+            entry["_rect"] = rect
             tasks.append(entry)
             slides_with_tasks.add(idx)
 
@@ -207,18 +220,7 @@ def main() -> int:
                     continue
                 img = cv2.imread(str(img_path))
                 ih, iw = img.shape[:2]
-                slide = prs.slides[t["slide"] - 1]
-                mk = next((s for s in slide.shapes if s.shape_id == t["marker_shape_id"]), None)
-                if mk is None:
-                    continue
-                x0, y0, x1, y1 = rect_of(mk)
-                if t["target"]:
-                    tg = next((s for s in slide.shapes
-                               if s.shape_id == t["target"]["shape_id"]), None)
-                    if tg is not None:
-                        r = rect_of(tg)
-                        x0, y0 = min(x0, r[0]), min(y0, r[1])
-                        x1, y1 = max(x1, r[2]), max(y1, r[3])
+                x0, y0, x1, y1 = t["_rect"]
                 pad = int(0.03 * sw)
                 px0 = max(0, int((x0 - pad) / sw * iw))
                 py0 = max(0, int((y0 - pad) / sh * ih))
@@ -250,6 +252,8 @@ def main() -> int:
                                 cv2.imwrite(str(scp), crop2)
                                 t["source_crop"] = str(scp.relative_to(out))
 
+    for t in tasks:
+        t.pop("_rect", None)
     payload = {
         "source": str(args.pptx),
         "source_sha256": hashlib.sha256(args.pptx.read_bytes()).hexdigest(),

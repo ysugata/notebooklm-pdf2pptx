@@ -37,14 +37,33 @@ def fail(msg: str) -> int:
 
 
 def set_paragraph_text(paragraph, new_text: str) -> None:
-    """段落のテキストを差し替える。書式は先頭ランを継承し、他ランは空にする。"""
+    """段落のテキストを差し替える。
+
+    文字数が同じ場合は既存ランの区切りで配り直す(色ラン分割等の
+    ラン単位の書式を保持)。文字数が変わる場合は先頭ランの書式を継承。
+    """
     runs = paragraph.runs
     if not runs:
         paragraph.text = new_text
         return
+    old = "".join(r.text for r in runs)
+    if len(old) == len(new_text):
+        pos = 0
+        for r in runs:
+            n = len(r.text)
+            r.text = new_text[pos:pos + n]
+            pos += n
+        return
     runs[0].text = new_text
     for r in runs[1:]:
         r.text = ""
+
+
+def iter_shapes_deep(shapes):
+    for s in shapes:
+        yield s
+        if s.shape_type == 6:  # GROUP
+            yield from iter_shapes_deep(s.shapes)
 
 
 def main() -> int:
@@ -77,6 +96,8 @@ def main() -> int:
     prs = Presentation(str(args.pptx))
     log = []
     applied = skipped = held = rejected = 0
+    # 同一図形に複数タスクを順に適用できるよう、適用後の期待本文を追跡する
+    expected: dict[tuple[int, int], list[str]] = {}
     for a in answers:
         aid = a.get("id")
         status = a.get("status")
@@ -104,14 +125,17 @@ def main() -> int:
             log.append({"id": aid, "result": "rejected", "reason": "targetまたはparagraphs欠落"})
             continue
         slide = prs.slides[t["slide"] - 1]
-        shape = next((s for s in slide.shapes if s.shape_id == target["shape_id"]), None)
+        shape = next((s for s in iter_shapes_deep(slide.shapes)
+                      if s.shape_id == target["shape_id"]), None)
         if shape is None or not getattr(shape, "has_text_frame", False):
             rejected += 1
             log.append({"id": aid, "result": "rejected", "reason": "指し先図形が見つからない"})
             continue
         paras = shape.text_frame.paragraphs
         cur = ["".join(r.text for r in p.runs) for p in paras]
-        if cur != target["paragraphs"]:
+        key = (t["slide"], target["shape_id"])
+        baseline = expected.get(key, target["paragraphs"])
+        if cur != baseline:
             rejected += 1
             log.append({"id": aid, "result": "rejected",
                         "reason": "指し先の本文が tasks 生成時から変わっている"})
@@ -129,11 +153,12 @@ def main() -> int:
         else:
             for p, txt in zip(paras, new_paras):
                 set_paragraph_text(p, txt)
+            expected[key] = list(new_paras)
             applied += 1
             log.append({"id": aid, "result": "applied",
                         "before": cur, "after": new_paras})
             if args.resolve_markers:
-                mk = next((s for s in slide.shapes
+                mk = next((s for s in iter_shapes_deep(slide.shapes)
                            if s.shape_id == t["marker_shape_id"]), None)
                 if mk is not None and getattr(mk, "has_text_frame", False):
                     p0 = mk.text_frame.paragraphs[0]
