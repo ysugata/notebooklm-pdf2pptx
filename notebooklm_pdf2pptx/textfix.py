@@ -31,10 +31,10 @@ VARIANTS: dict[str, str] = {str(k): str(v) for k, v in {
     "结": "結", "统": "統", "继": "継", "绩": "績", "总": "総", "练": "練",
     "县": "県", "观": "観", "览": "覧", "规": "規", "视": "視", "览": "覧",
     "农": "農", "劳": "労", "动": "動", "务": "務", "为": "為", "办": "弁",
-    "机": "機", "极": "極", "构": "構", "标": "標", "术": "術", "环": "環",
+    "极": "極", "构": "構", "标": "標", "术": "術", "环": "環",
     "现": "現", "产": "産", "养": "養", "亲": "親", "热": "熱", "点": "点",
     "国": "国", "会": "会", "对": "対", "个": "個", "们": "們", "华": "華",
-    "汉": "漢", "汇": "彙", "报": "報", "护": "護", "据": "拠", "扬": "揚",
+    "汉": "漢", "汇": "彙", "报": "報", "护": "護", "扬": "揚",
     "职": "職", "联": "連", "聪": "聡", "脑": "脳", "医": "医", "变": "変",
     # 旧字体
     "亞": "亜", "惡": "悪", "壓": "圧", "圍": "囲", "醫": "医", "爲": "為",
@@ -67,6 +67,7 @@ CONFUSABLE_GROUPS: list[str] = [
     "州洲", "制製", "象像", "遣遺遷", "適摘敵滴", "底低抵", "貫慣",
     "設誤設", "輸諭輪", "書晝", "員買貢", "労栄営", "策索", "探深",
     "縄繩", "接授援", "府符附", "都部", "防妨坊", "折析祈", "科料斗", "探深突",
+    "瞻職聴", "遴避選", "赣続",
     "維推唯", "億憶臆", "促捉", "季委秀", "各名", "処拠処", "永氷水",
     "田由甲申", "白百日目自", "人入八", "大太犬", "王玉主", "止正",
     "貝見具", "刀力", "工エ王", "口ロ", "夕タ", "二ニ", "力カ", "十†",
@@ -77,6 +78,7 @@ for group in CONFUSABLE_GROUPS:
         _CONFUSABLE[ch] = "".join(c for c in group if c != ch)
 
 _KANJI_RUN = re.compile(r"[一-鿿々]{2,6}")
+_KANJI_CHAR = re.compile(r"[一-鿿々]")
 
 
 def normalize_variants(text: str) -> tuple[str, list[tuple[str, str]]]:
@@ -114,12 +116,26 @@ class TextRepairer:
         return (len(ms) == 1 and not ms[0].is_oov()
                 and ms[0].surface() == run)
 
-    def _quality(self, run: str) -> tuple[int, int, int]:
-        """トークン化の品質 (OOV数, 1文字漢字断片数, 形態素数)。小さいほど良い。"""
-        ms = self._tokenizer.tokenize(run)
+    def _analyze(self, run: str):
+        """トークン列と壊れ指標を返す。
+
+        「壊れ」= OOV、または1文字漢字断片が**隣接して連続**する箇所。
+        単独の1文字漢字形態素(助数詞の人・日、接頭辞の約・全 等)は
+        日本語として正常なので壊れとみなさない。改+州、機+閔のような
+        「1文字断片の連続」だけが誤読の兆候。
+        """
+        ms = list(self._tokenizer.tokenize(run))
+        is_single = [len(m.surface()) == 1 and bool(_KANJI_CHAR.match(m.surface()))
+                     for m in ms]
         n_oov = sum(1 for m in ms if m.is_oov())
-        n_single = sum(1 for m in ms if len(m.surface()) == 1)
-        return (n_oov, n_single, len(ms))
+        n_pairs = sum(1 for i in range(len(ms) - 1)
+                      if is_single[i] and is_single[i + 1])
+        return ms, is_single, n_oov, n_pairs
+
+    def _quality(self, run: str) -> tuple[int, int, int]:
+        """トークン化の品質 (OOV数, 隣接1文字断片ペア数, 形態素数)。"""
+        ms, _is_single, n_oov, n_pairs = self._analyze(run)
+        return (n_oov, n_pairs, len(ms))
 
     def _looks_broken(self, run: str) -> bool:
         """漢字連続が「1文字断片」やOOVを含む=単語として成立していないか。"""
@@ -131,39 +147,78 @@ class TextRepairer:
     def repair(self, text: str, max_fixes: int = 3) -> tuple[str, list[tuple[str, str]]]:
         """形近字置換で辞書語に修復できる箇所だけを直す。
 
-        採用条件は厳格: 元の漢字連続が壊れており、1文字だけの置換で
-        連続全体が単一の辞書形態素になる場合のみ。曖昧な場合は触らない。
+        判定は必ず「行全体」のトークン化品質で行う。孤立した漢字連続だけを
+        見ると、送り仮名に続く正常な漢字(見据えた・4年目 等)まで壊れて
+        見えるため。採用条件: 行に壊れの兆候(OOVまたは1文字漢字断片)が
+        あり、形近字1字の置換で行全体の品質が厳密に改善する場合のみ。
         """
         if self._tokenizer is None:
             return text, []
         fixes: list[tuple[str, str]] = []
         result = text
-        for match in list(_KANJI_RUN.finditer(text)):
-            if len(fixes) >= max_fixes:
-                break
-            run = match.group(0)
-            if self._is_single_word(run) or not self._looks_broken(run):
-                continue
-            base_q = self._quality(run)
-            best = None
-            for i, ch in enumerate(run):
-                for cand in _CONFUSABLE.get(ch, ""):
-                    trial = run[:i] + cand + run[i + 1:]
-                    # 採用条件: (a) 連続全体が単一の辞書語になる、または
-                    # (b) OOVと1文字断片が消え、形態素数も減る(長い複合語)
-                    if self._is_single_word(trial):
-                        best = (ch, cand, trial)
-                        break
-                    q = self._quality(trial)
-                    if q[0] == 0 and q[1] == 0 and q[2] < base_q[2]:
-                        best = (ch, cand, trial)
-                        break
-                if best:
+        for _ in range(max_fixes):
+            base_q = self._quality(result)
+            if base_q[0] == 0 and base_q[1] == 0:
+                break  # 行に壊れの兆候なし
+            # 置換候補の位置は「壊れた形態素の中」に限定する。壊れ=OOV、
+            # または隣接する1文字漢字断片の連続に参加している形態素。
+            # 健全な形態素(送り仮名つき語幹・数値に付く助数詞等)を触ると
+            # 辞書的に成立する別語への誤修正が起こるため。
+            ms, is_single, _oov, _pairs = self._analyze(result)
+            in_pair = [False] * len(ms)
+            for i in range(len(ms) - 1):
+                if is_single[i] and is_single[i + 1]:
+                    in_pair[i] = in_pair[i + 1] = True
+            broken_pos: set[int] = set()
+            offset = 0
+            for idx, m in enumerate(ms):
+                surface = m.surface()
+                start = result.find(surface, offset)
+                if start < 0:
                     break
+                offset = start + len(surface)
+                if m.is_oov() or in_pair[idx]:
+                    broken_pos.update(range(start, start + len(surface)))
+            def _healed_word_at(trial: str, pos: int) -> bool:
+                """置換位置を含む形態素が2文字以上の漢字辞書語になったか。"""
+                offset2 = 0
+                for m in self._tokenizer.tokenize(trial):
+                    s = m.surface()
+                    start2 = trial.find(s, offset2)
+                    if start2 < 0:
+                        return False
+                    offset2 = start2 + len(s)
+                    if start2 <= pos < start2 + len(s):
+                        if not (len(s) >= 2 and not m.is_oov()
+                                and all(_KANJI_CHAR.match(c) for c in s)):
+                            return False
+                        # 人名(姓)としてだけ辞書に載る稀少語(八的・入中等)への
+                        # 「治癒」は偽物なので棄却する
+                        pos_tags = m.part_of_speech()
+                        return not (pos_tags[1] == "固有名詞"
+                                    and pos_tags[2] == "人名")
+                return False
+
+            best = None
+            for pos, ch in enumerate(result):
+                if pos not in broken_pos or not _KANJI_CHAR.match(ch):
+                    continue
+                for cand in _CONFUSABLE.get(ch, ""):
+                    # 修復先は漢字に限定(カタカナ等の形近字は照合用途のみ)
+                    if not _KANJI_CHAR.match(cand):
+                        continue
+                    trial = result[:pos] + cand + result[pos + 1:]
+                    q = self._quality(trial)
+                    # 採用条件: 行品質が厳密改善し、かつ置換位置を含む
+                    # 形態素が2文字以上の漢字辞書語として成立(局所的な治癒)
+                    if (q < base_q and q[0] <= base_q[0] and q[1] <= base_q[1]
+                            and _healed_word_at(trial, pos)):
+                        if best is None or q < best[0]:
+                            best = (q, pos, ch, cand, trial)
             if best is None:
-                continue
-            old, new, trial = best
-            result = result.replace(run, trial, 1)
+                break
+            _q, _pos, old, new, trial = best
+            result = trial
             fixes.append((old, new))
         return result, fixes
 

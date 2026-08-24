@@ -58,7 +58,7 @@ def _hash_inputs(paths: list[Path], settings: Settings) -> str:
         "inpaint": settings.inpaint,
         "render_scale": settings.render_scale,
         "non_portable_penalty": settings.non_portable_penalty,
-        "version": 24,
+        "version": 25,
     }
     digest.update(json.dumps(relevant, sort_keys=True).encode())
     return digest.hexdigest()[:16]
@@ -451,6 +451,15 @@ class Converter:
 
         kept_native = [xml for index, xml in enumerate(page.native_xml)
                        if index not in drop_native]
+        # 持ち越しネイティブテキストにも文字化け修正を適用する
+        # (以前の出力への加筆等、ラウンドトリップ入力に残る化け字対策)
+        kept_native, native_fixes = self._fix_native_text(kept_native)
+        if native_fixes:
+            listed = ", ".join(f"{a}→{b}" for a, b in native_fixes[:12])
+            if len(native_fixes) > 12:
+                listed += " …"
+            review.append({"text": "", "confidence": 1.0, "bbox": [0, 0, 0, 0],
+                           "reason": f"ネイティブ文字化け修正: {listed}"})
         for index, xml in enumerate(kept_native):
             (page_dir / f"native_{index:02d}.xml").write_text(xml, encoding="utf-8")
 
@@ -655,6 +664,42 @@ class Converter:
         if n_changed:
             print(f"フォント調和: {n_changed}行を多数派族"
                   f"({'/'.join(dominant.values())})へ統一", flush=True)
+
+    def _fix_native_text(self, xml_list):
+        """持ち越しネイティブ図形内のテキストにも文字化け修正を適用する。
+
+        置換は常に1文字→1文字なので、段落内の全ラン(a:t)を連結して修正し、
+        同じ位置割りで各ランへ書き戻す(色分割等で語がランを跨いでいても
+        正しく直る)。スタイル・レイアウトには一切触れない。
+        """
+        from lxml import etree
+        A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+        fixes_all: list[tuple[str, str]] = []
+        out: list[str] = []
+        for xml in xml_list:
+            try:
+                root = etree.fromstring(xml.encode("utf-8"))
+            except Exception:
+                out.append(xml)
+                continue
+            changed = False
+            for para in root.iter(A + "p"):
+                ts = list(para.iter(A + "t"))
+                joined = "".join(t.text or "" for t in ts)
+                if not joined.strip():
+                    continue
+                fixed, fixes = self.textfix.apply(joined)
+                if not fixes or len(fixed) != len(joined):
+                    continue
+                pos = 0
+                for t in ts:
+                    n = len(t.text or "")
+                    t.text = fixed[pos:pos + n]
+                    pos += n
+                fixes_all.extend(fixes)
+                changed = True
+            out.append(etree.tostring(root, encoding="unicode") if changed else xml)
+        return out, fixes_all
 
     @staticmethod
     def _carry_theme(input_pptx: Path, output_pptx: Path) -> None:
