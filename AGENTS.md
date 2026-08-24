@@ -60,8 +60,16 @@ CodexでもClaude Codeでも同じ。**エージェントの自由裁量は answ
    `runs/feedback_*.jsonl` に全変更を記録する。拒否が出たら理由を読んで
    answers.json を直し、再実行する。
 
-5. **報告**: 適用サマリ(適用/skip/要人間の件数)と、needs_human の一覧を
-   依頼者に伝える。needs_human は人間の回答を得てから手順3〜4を繰り返す。
+5. **レポート生成(必須)**:
+   ```
+   .venv/bin/python tools/feedback_report.py feedback_work/tasks.json \
+       feedback_work/answers.json --runs-log runs/feedback_<最新>.jsonl \
+       -o feedback_work/report.html
+   ```
+   needs_human は**全件・省略なく**切り抜き画像つきでレポートに載る。
+   依頼者への報告では、要判断の項目を要約で潰さず、レポートのパスと
+   件数、および各項目の一行サマリを必ず伝える。回答を得たら手順3〜4を
+   繰り返す。
 
 ## 検出ルールの調整
 

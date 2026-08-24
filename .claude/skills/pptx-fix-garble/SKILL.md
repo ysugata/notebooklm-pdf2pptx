@@ -35,8 +35,14 @@ description: 編集可能化したPPTXに残る文字化け(AI崩れ字の誤読
    ```
    `--work-dir` により修正が変換キャッシュへも書き戻され、再変換しても
    保たれ、同じタスクが再提示されなくなる。拒否が出たら理由を読んで answers を直し再実行。
-5. 報告: 直した件数と内容(X→Y)、読めず保留にした件数と場所、
-   画像のまま保持で修正対象外だった行の一覧。
+5. レポート生成と報告(必須):
+   ```
+   .venv/bin/python tools/feedback_report.py feedback_work/tasks.json \
+       feedback_work/answers.json --runs-log runs/feedback_<最新>.jsonl \
+       -o feedback_work/report.html
+   ```
+   わからなかったもの(needs_human)は**全件・省略なく**画像つきで
+   レポートに載る。報告でも全件を一行ずつ列挙し、要約で潰さない。
 
 ## 鉄則
 
