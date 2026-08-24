@@ -384,8 +384,47 @@ def load_pptx_pages(pptx_path: Path, settings: Settings, pages: list[int] | None
                 base_shape, base_bbox = best[0], best[1]
 
         if base_shape is None:
-            raise ValueError(
-                f"slide {index}: 全面画像が見つかりません (PPTX入力は全面画像スライドのみ対応)")
+            # 全面画像が無い = 既にネイティブなスライド(差し替えページ・
+            # 修正指示ページ等)。変換の対象ではないので素通しで持ち越す。
+            # 画像シェイプはrels破損防止のためオーバーレイ画像として再配置し、
+            # それ以外の図形はネイティブXMLとして丸ごと保持する。
+            canvas_w = 1376
+            canvas_h = max(int(round(canvas_w * slide_h / slide_w)), 2)
+            white = np.full((canvas_h, canvas_w, 3), 255, np.uint8)
+            sx = canvas_w / slide_w
+            sy = canvas_h / slide_h
+            overlays_img = []
+            for shape, bbox, _cov in pics:
+                overlays_img.append(OverlayImage(
+                    data=shape.image.blob, ext=shape.image.ext,
+                    bbox_px=(bbox[0] * sx, bbox[1] * sy,
+                             (bbox[0] + bbox[2]) * sx, (bbox[1] + bbox[3]) * sy)))
+            native_xml = []
+            for shape in slide.shapes:
+                if shape.shape_type == 13:
+                    continue
+                element = _copy.deepcopy(shape._element)
+                for pic in element.findall(f".//{PIC_TAG}"):
+                    pic.getparent().remove(pic)
+                for tag in ("hlinkClick", "hlinkHover", "hlinkMouseOver"):
+                    for node in element.findall(
+                            ".//{http://schemas.openxmlformats.org/drawingml/2006/main}" + tag):
+                        node.getparent().remove(node)
+                native_xml.append(etree.tostring(element, encoding="unicode"))
+            yield CanvasPage(
+                number=index,
+                image=white,
+                needs_ocr=False,
+                px_per_pt=sx * 12700.0,
+                overlay_texts=[],
+                overlay_images=overlays_img,
+                source_kind="pptx",
+                slide_emu=(slide_w, slide_h),
+                native_xml=native_xml,
+                cover_rects_px=[],
+                cover_shapes=[],
+            )
+            continue
 
         image = _decode_image(base_shape.image.blob)
         if image is None:

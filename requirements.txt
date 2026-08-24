@@ -6,3 +6,5 @@ opencv-python-headless==5.0.0.93
 fonttools==4.63.0
 rapidocr==3.9.2
 onnxruntime==1.29.0
+sudachipy>=0.6
+sudachidict_core

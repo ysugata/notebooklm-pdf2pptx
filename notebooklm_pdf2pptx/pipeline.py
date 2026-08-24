@@ -58,7 +58,7 @@ def _hash_inputs(paths: list[Path], settings: Settings) -> str:
         "inpaint": settings.inpaint,
         "render_scale": settings.render_scale,
         "non_portable_penalty": settings.non_portable_penalty,
-        "version": 21,
+        "version": 23,
     }
     digest.update(json.dumps(relevant, sort_keys=True).encode())
     return digest.hexdigest()[:16]
@@ -72,12 +72,20 @@ class Converter:
             self.library, settings, JP_FONT_CANDIDATES, LATIN_FONT_CANDIDATES
         )
         self._ocr: OcrEngine | None = None
+        self._textfix = None
 
     @property
     def ocr(self) -> OcrEngine:
         if self._ocr is None:
             self._ocr = OcrEngine(self.settings)
         return self._ocr
+
+    @property
+    def textfix(self):
+        if self._textfix is None:
+            from .textfix import TextRepairer
+            self._textfix = TextRepairer()
+        return self._textfix
 
     # ------------------------------------------------------------------
     def convert(self, input_path: Path, output_path: Path) -> dict:
@@ -115,6 +123,11 @@ class Converter:
         LAMA_CHUNK = 12
         for start in range(0, len(lama_queue), LAMA_CHUNK):
             self._run_lama(pages_dir, lama_queue[start:start + LAMA_CHUNK])
+
+        # 資料全体のフォント調和: 行単位の照合はページ毎に独立なため、
+        # 同じ役割のテキストがページによって近縁の別フォント族に解決されうる。
+        # script別の多数派族を投票で決め、外れ行を再照合して置き換える。
+        self._harmonize_deck_fonts(pages_dir, processed)
 
         from .pptx_writer import build_presentation
 
@@ -205,6 +218,16 @@ class Converter:
                 # 丸記号のみの行(評価表の◎○●等): OCRのラテン文字化を
                 # インクの輪郭入れ子構造の実測で正しい記号へ戻す
                 text = fix_circle_glyphs(text, line, image)
+                # 文字化けの決定論的修正: 異体字・簡体字の正規化 +
+                # 辞書検証つき形近字修復(単語として成立しない漢字連続が、
+                # 形の似た1字の置換で辞書語になる場合のみ)。修正はreviewに記録
+                text, kanji_fixes = self.textfix.apply(text)
+                if kanji_fixes:
+                    review.append({"text": text,
+                                   "confidence": round(line.confidence, 3),
+                                   "bbox": [round(v, 1) for v in line.bbox],
+                                   "reason": "文字化け予測修正: " + ", ".join(
+                                       f"{a}→{b}" for a, b in kanji_fixes)})
                 # サイズ混在行(分割不可のもの): インクbbox高は最大文字に
                 # 引っ張られるため、文字高さの中央値を初期サイズのヒントにする
                 size_hint = 1.0
@@ -474,6 +497,154 @@ class Converter:
                         line.style = fallback
 
     # ------------------------------------------------------------------
+    def _harmonize_deck_fonts(self, pages_dir: Path, processed: list[dict]) -> None:
+        """資料全体でフォント族を調和させる(ページ横断の一般則)。
+
+        NotebookLM系スライドの実デザインは少数のフォント族で組まれているが、
+        行単位のテンプレート照合はページ毎に独立なため、同格のテキストが
+        近縁の別族(和文の丸ゴ/UD系、欧文の各種コンデンス)や偶発的な
+        システムフォントへ割れることがある。照合の強い行(NCC≥0.5)の投票で
+        script別の多数派族を決め、外れ行を「同サイズ・最寄りウェイトの
+        多数派族」で再照合し、相関が劣化しない場合のみ置き換える。
+        等幅族が強い相関で選ばれている行(コード等)は設計上の別物として保護。
+        キャッシュ済みlayout.jsonを直接更新するため再OCR・再修復は不要で、
+        再実行しても結果は変わらない(冪等)。
+        """
+        import re
+        from types import SimpleNamespace
+
+        settings = self.settings
+        jp_char = re.compile(r"[ぁ-ゖァ-ヺ一-鿿々〆]")
+        face_of = {(f.path, f.index): f
+                   for f in (self.candidates.jp + self.candidates.latin)}
+        by_family: dict[str, list] = {}
+        for f in self.candidates.jp + self.candidates.latin:
+            by_family.setdefault(f.family, []).append(f)
+
+        def is_mono_family(name: str) -> bool:
+            return "mono" in name.lower() or name == "BIZ UDGothic"
+
+        # --- 投票: script別の多数派族 ---
+        layouts: dict[int, dict] = {}
+        votes = {"jp": {}, "latin": {}}
+        for rec in processed:
+            page_dir = pages_dir / f"{rec['number']:03d}"
+            try:
+                layout = json.loads((page_dir / "layout.json").read_text("utf-8"))
+            except Exception:
+                continue
+            layouts[rec["number"]] = layout
+            for block in layout["blocks"]:
+                for ln in block["lines"]:
+                    if ln.get("source") != "ocr" or (ln.get("ncc") or 0) < 0.5:
+                        continue
+                    face = face_of.get((ln["font_path"], ln["font_index"]))
+                    if face is None or is_mono_family(face.family):
+                        continue
+                    script = "jp" if jp_char.search(ln["text"]) else "latin"
+                    votes[script][face.family] = votes[script].get(face.family, 0) + 1
+        dominant: dict[str, str] = {}
+        for script, counter in votes.items():
+            total = sum(counter.values())
+            if not counter or total < 8:
+                continue
+            family, count = max(counter.items(), key=lambda kv: kv[1])
+            if count / total >= 0.35:
+                dominant[script] = family
+        if not dominant:
+            return
+
+        def weight_of(ln, face) -> int:
+            if face is not None:
+                return face.weight
+            name = ln["font_family"].lower()
+            if "black" in name or "heavy" in name:
+                return 900
+            if "bold" in name:
+                return 700
+            if "medium" in name:
+                return 500
+            if "light" in name or "thin" in name:
+                return 300
+            return 400
+
+        n_changed = 0
+        for number, layout in sorted(layouts.items()):
+            page_dir = pages_dir / f"{number:03d}"
+            pt_per_px = layout["pt_per_px"]
+            image = None
+            dirty = False
+            for block in layout["blocks"]:
+                for ln in block["lines"]:
+                    if ln.get("source") != "ocr" or (ln.get("ncc") or 0) < 0.30:
+                        continue
+                    script = "jp" if jp_char.search(ln["text"]) else "latin"
+                    target_family = dominant.get(script)
+                    if target_family is None:
+                        continue
+                    face = face_of.get((ln["font_path"], ln["font_index"]))
+                    if face is not None and face.family == target_family:
+                        continue
+                    # 等幅が強い相関で選ばれている行は設計上の別物(コード等)
+                    if (face is not None and is_mono_family(face.family)
+                            and (ln.get("ncc") or 0) >= 0.55):
+                        continue
+                    pool = by_family.get(target_family) or []
+                    if not pool:
+                        continue
+                    want_w = weight_of(ln, face)
+                    target = min(pool, key=lambda f: (abs(f.weight - want_w),
+                                                      f.italic))
+                    if image is None:
+                        image = cv2.imread(str(page_dir / "source.png"))
+                        if image is None:
+                            break
+                    x0, y0, x1, y1 = ln["ink_bbox"]
+                    grad = ln.get("gradient")
+                    shim = SimpleNamespace(
+                        ink_bbox=(x0, y0, x1, y1),
+                        ink_w=x1 - x0 + 1, ink_h=y1 - y0 + 1,
+                        color=tuple(ln["color"]),
+                        color_top=tuple(grad[0]) if grad else tuple(ln["color"]),
+                        color_bottom=tuple(grad[1]) if grad else tuple(ln["color"]),
+                    )
+                    size_px = ln["size_pt"] / pt_per_px
+                    seed = resolve_with(ln["text"], shim, target, ln["size_pt"],
+                                        pt_per_px, settings)
+                    if seed is None:
+                        continue
+                    refined = refine_by_template(
+                        image, ln["text"], target, seed, shim, pt_per_px,
+                        settings, size_lock_px=max(7, int(round(size_px))))
+                    if refined is None:
+                        continue
+                    new_style, new_ncc = refined
+                    # 劣化ガード: 相関が下がりすぎる置換はしない(真にその族の行)
+                    if new_ncc < max(0.35, (ln.get("ncc") or 0) - 0.08):
+                        continue
+                    em_px = new_style.size_pt / pt_per_px
+                    if new_style.advance_w_px > shim.ink_w * 1.12 + 1.2 * em_px:
+                        continue
+                    ln.update({
+                        "font_family": target.typeface,
+                        "font_path": target.path,
+                        "font_index": target.index,
+                        "char_spacing_pt": new_style.char_spacing_pt,
+                        "bold": target.bind_bold,
+                        "origin_x_px": round(new_style.origin_x_px, 2),
+                        "baseline_y_px": round(new_style.baseline_y_px, 2),
+                        "advance_w_px": round(new_style.advance_w_px, 2),
+                        "ncc": round(new_ncc, 4),
+                    })
+                    dirty = True
+                    n_changed += 1
+            if dirty:
+                (page_dir / "layout.json").write_text(
+                    json.dumps(layout, ensure_ascii=False, indent=1), "utf-8")
+        if n_changed:
+            print(f"フォント調和: {n_changed}行を多数派族"
+                  f"({'/'.join(dominant.values())})へ統一", flush=True)
+
     @staticmethod
     def _carry_theme(input_pptx: Path, output_pptx: Path) -> None:
         """入力PPTXのテーマ(theme1.xml)を出力へコピーする。"""
