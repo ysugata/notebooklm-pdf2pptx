@@ -9,3 +9,7 @@ output*.pptx
 .DS_Store
 text_layout.generated.json
 fonts/
+feedback_work/
+runs/
+inbox/
+outbox/

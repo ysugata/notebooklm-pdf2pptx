@@ -1,0 +1,26 @@
+# 修正指示(注記)図形の検出ルール。コードではなく設定として管理する。
+# 検出は計測可能な性質(図形タイプ・文言パターン)のみで行う。
+
+marker:
+  # 注記とみなす吹き出し系のprstGeom接頭辞(言語・図形名に依存しない)
+  geometry_prefixes:
+    - wedge        # wedgeRectCallout / wedgeRoundRectCallout / wedgeEllipseCallout
+    - borderCallout
+    - callout
+    - cloudCallout
+  # 吹き出しでなくても注記とみなす文言(短いテキスト図形のみ)
+  instruction_keywords:
+    - 文字化け
+    - 修正して
+    - 直して
+    - 削除して
+    - 要確認
+    - 要修正
+  max_text_chars: 120   # これより長い本文は注記ではなく内容と判断
+
+classify:
+  # A: 文字化け系(指し先の文字を読める形に直す)
+  garble_keywords: [文字化け, 化けて, 読めない]
+  # B: 置換指示系(指示文の中に修正後の文面が含まれる)
+  replacement_patterns: ["→【", "→「", "に変更", "に修正", "へ変更"]
+  # 上記いずれにも該当しない注記は C (人間の判断が必要) として残す
