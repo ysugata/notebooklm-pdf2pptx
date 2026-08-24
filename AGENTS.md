@@ -52,8 +52,10 @@ CodexでもClaude Codeでも同じ。**エージェントの自由裁量は answ
    ```
    .venv/bin/python tools/feedback_apply.py "<編集可能.pptx>" \
        feedback_work/tasks.json feedback_work/answers.json -o "<出力.pptx>" \
-       --resolve-markers
+       --resolve-markers --work-dir <変換時のworkディレクトリ>
    ```
+   `--work-dir` により修正は変換キャッシュ(layout.json等)へも書き戻され、
+   再変換しても保たれる。
    スキーマ・ハッシュ・段落数・本文不変性を検証してから適用し、
    `runs/feedback_*.jsonl` に全変更を記録する。拒否が出たら理由を読んで
    answers.json を直し、再実行する。

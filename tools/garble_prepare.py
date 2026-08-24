@@ -68,7 +68,7 @@ def main() -> int:
         for r in lay.get("review", []):
             reason = r.get("reason", "")
             text = r.get("text", "")
-            if not text.strip():
+            if not text.strip() or r.get("resolved"):
                 continue
             if any(k in reason for k in IMAGE_KEPT_KEYS):
                 image_kept.append((page, text[:24], reason))

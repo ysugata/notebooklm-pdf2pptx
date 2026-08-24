@@ -30,9 +30,11 @@ description: 編集可能化したPPTXに残る文字化け(AI崩れ字の誤読
 4. 適用(決定論・検証つき):
    ```
    .venv/bin/python tools/feedback_apply.py "<編集可能.pptx>" \
-       feedback_work/tasks.json feedback_work/answers.json -o "<出力.pptx>"
+       feedback_work/tasks.json feedback_work/answers.json -o "<出力.pptx>" \
+       --work-dir <変換時のworkディレクトリ>
    ```
-   拒否が出たら理由を読んで answers を直し再実行。
+   `--work-dir` により修正が変換キャッシュへも書き戻され、再変換しても
+   保たれ、同じタスクが再提示されなくなる。拒否が出たら理由を読んで answers を直し再実行。
 5. 報告: 直した件数と内容(X→Y)、読めず保留にした件数と場所、
    画像のまま保持で修正対象外だった行の一覧。
 

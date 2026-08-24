@@ -129,6 +129,11 @@ class Converter:
         # script別の多数派族を投票で決め、外れ行を再照合して置き換える。
         self._harmonize_deck_fonts(pages_dir, processed)
 
+        # 修正台帳のリプレイ: 人間/エージェントが適用した文字修正
+        # (tools/feedback_apply.py --work-dir)を、フル再解析後の
+        # layout.jsonにも再適用する。冪等(適用済みなら素通り)。
+        self._replay_fix_ledger(pages_dir)
+
         from .pptx_writer import build_presentation
 
         report = build_presentation(processed, pages_dir, output_path, settings, self.library)
@@ -664,6 +669,53 @@ class Converter:
         if n_changed:
             print(f"フォント調和: {n_changed}行を多数派族"
                   f"({'/'.join(dominant.values())})へ統一", flush=True)
+
+    def _replay_fix_ledger(self, pages_dir: Path) -> None:
+        """修正台帳(fixes_ledger.jsonl)をlayout.jsonへリプレイする。
+
+        エージェント/人間が適用した文字修正は台帳に永続化されており、
+        キャッシュのバージョンアップ等でページがフル再解析されても
+        ここで再適用されるため失われない。行テキストが台帳のbeforeと
+        完全一致する場合のみ置換する(既に適用済み・本文が変わった場合は
+        素通り)。reviewの該当エントリにはresolvedを立てる。
+        """
+        ledger = self.settings.work_dir / "fixes_ledger.jsonl"
+        if not ledger.is_file():
+            return
+        by_slide: dict[int, list] = {}
+        for line in ledger.read_text("utf-8").splitlines():
+            try:
+                e = json.loads(line)
+                by_slide.setdefault(int(e["slide"]), []).append(e)
+            except Exception:
+                continue
+        n_applied = 0
+        for slide_no, entries in sorted(by_slide.items()):
+            lay_path = pages_dir / f"{slide_no:03d}" / "layout.json"
+            if not lay_path.is_file():
+                continue
+            lay = json.loads(lay_path.read_text("utf-8"))
+            dirty = False
+            for e in entries:
+                before, after = e["before"], e["after"]
+                for block in lay.get("blocks", []):
+                    texts = [ln["text"] for ln in block["lines"]]
+                    if texts == before:
+                        for ln, new in zip(block["lines"], after):
+                            ln["text"] = new
+                        dirty = True
+                        n_applied += 1
+                        break
+                changed = {old for old, new in zip(before, after) if old != new}
+                for r in lay.get("review", []):
+                    if r.get("text") in changed and not r.get("resolved"):
+                        r["resolved"] = True
+                        dirty = True
+            if dirty:
+                lay_path.write_text(
+                    json.dumps(lay, ensure_ascii=False, indent=1), "utf-8")
+        if n_applied:
+            print(f"修正台帳: {n_applied}件をリプレイ適用", flush=True)
 
     def _fix_native_text(self, xml_list):
         """持ち越しネイティブ図形内のテキストにも文字化け修正を適用する。

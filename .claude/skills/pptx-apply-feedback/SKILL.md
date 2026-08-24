@@ -27,8 +27,10 @@ description: 吹き出し等の注記(修正指示)が付いたPPTXを受け取�
    ```
    .venv/bin/python tools/feedback_apply.py "<編集可能.pptx>" \
        feedback_work/tasks.json feedback_work/answers.json \
-       -o "<出力_修正版.pptx>" --resolve-markers
+       -o "<出力_修正版.pptx>" --resolve-markers \
+       --work-dir <変換時のworkディレクトリ>
    ```
+   (`--work-dir` で修正がキャッシュへも書き戻され、再変換後も保たれる)
    - 注記は既定で残す(--resolve-markers は処理済みに✔を付けるだけ)。
      消すのはユーザーの指示があった場合のみ
 5. 報告: 適用/保留/拒否の件数、needs_human の一覧(質問はそのまま

@@ -66,6 +66,75 @@ def iter_shapes_deep(shapes):
             yield from iter_shapes_deep(s.shapes)
 
 
+def writeback_workdir(work_dir: Path, slide_no: int,
+                      before: list[str], after: list[str]) -> str:
+    """適用済み修正を変換キャッシュへ書き戻す。
+
+    layout.jsonの該当ブロック(行テキストが完全一致)を更新し、見つからなければ
+    native_*.xml内の段落テキストを更新する。あわせて、修正で変わった行に
+    一致するreviewエントリへ resolved を立てる(タスクの再提示防止)。
+    戻り値は書き戻し先の種別("layout" / "native" / "none")。
+    """
+    page_dir = work_dir / "pages" / f"{slide_no:03d}"
+    lay_path = page_dir / "layout.json"
+    # 修正台帳へ永続記録: フル再解析(バージョンアップ等)でlayout.jsonが
+    # 作り直されても、変換パイプラインが合成前にこの台帳をリプレイする
+    ledger = work_dir / "fixes_ledger.jsonl"
+    entry = json.dumps({"slide": slide_no, "before": before, "after": after},
+                       ensure_ascii=False)
+    existing = ledger.read_text("utf-8").splitlines() if ledger.is_file() else []
+    if entry not in existing:
+        with open(ledger, "a", encoding="utf-8") as f:
+            f.write(entry + "\n")
+    kind = "none"
+    if lay_path.is_file():
+        lay = json.loads(lay_path.read_text("utf-8"))
+        for block in lay.get("blocks", []):
+            texts = [ln["text"] for ln in block["lines"]]
+            if texts == before:
+                for ln, new in zip(block["lines"], after):
+                    ln["text"] = new
+                kind = "layout"
+                break
+        changed_lines = {old for old, new in zip(before, after) if old != new}
+        for r in lay.get("review", []):
+            if r.get("text") in changed_lines:
+                r["resolved"] = True
+        if kind == "layout" or changed_lines:
+            lay_path.write_text(json.dumps(lay, ensure_ascii=False, indent=1),
+                                "utf-8")
+    if kind == "none":
+        # ネイティブ図形が指し先だった場合: native_*.xml の段落を更新
+        from lxml import etree
+        A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+        for xml_path in sorted(page_dir.glob("native_*.xml")):
+            root = etree.fromstring(xml_path.read_bytes())
+            dirty = False
+            paras = [p for p in root.iter(A + "p")]
+            for p in paras:
+                ts = list(p.iter(A + "t"))
+                joined = "".join(t.text or "" for t in ts)
+                for old, new in zip(before, after):
+                    if old != new and joined == old:
+                        if len(new) == len(old):
+                            pos = 0
+                            for t in ts:
+                                n = len(t.text or "")
+                                t.text = new[pos:pos + n]
+                                pos += n
+                        elif ts:
+                            ts[0].text = new
+                            for t in ts[1:]:
+                                t.text = ""
+                        dirty = True
+            if dirty:
+                xml_path.write_text(etree.tostring(root, encoding="unicode"),
+                                    "utf-8")
+                kind = "native"
+                break
+    return kind
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("pptx", type=Path)
@@ -74,6 +143,11 @@ def main() -> int:
     ap.add_argument("-o", "--output", type=Path, required=True)
     ap.add_argument("--resolve-markers", action="store_true",
                     help="適用済みタスクの注記本文の先頭に ✔ を付ける")
+    ap.add_argument("--work-dir", type=Path, default=None,
+                    help="変換時のworkディレクトリ。指定すると修正をキャッシュ"
+                         "(layout.json / native_*.xml)へも書き戻し、reviewを"
+                         "解決済みにする。再変換しても修正が保たれ、"
+                         "同じタスクが再提示されなくなる")
     args = ap.parse_args()
 
     tasks_body = args.tasks.read_text("utf-8")
@@ -155,8 +229,11 @@ def main() -> int:
                 set_paragraph_text(p, txt)
             expected[key] = list(new_paras)
             applied += 1
+            wb = "none"
+            if args.work_dir is not None:
+                wb = writeback_workdir(args.work_dir, t["slide"], cur, new_paras)
             log.append({"id": aid, "result": "applied",
-                        "before": cur, "after": new_paras})
+                        "before": cur, "after": new_paras, "writeback": wb})
             if args.resolve_markers:
                 mk = next((s for s in iter_shapes_deep(slide.shapes)
                            if s.shape_id == t["marker_shape_id"]), None)
