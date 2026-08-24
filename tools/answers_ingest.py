@@ -75,6 +75,8 @@ def parse_answers(text: str, tasks: dict) -> tuple[list[dict], list[str]]:
             answers.append({"id": tid, "status": "skip"})
         elif value in ("保留", "わからない", "スキップ"):
             answers.append({"id": tid, "status": "needs_human"})
+        elif value in ("元に戻す", "復元", "アイコン"):
+            answers.append({"id": tid, "status": "restore"})
         elif value in ("消す", "削除"):
             n = len(t["target"]["paragraphs"]) if t.get("target") else 1
             answers.append({"id": tid, "status": "fix", "paragraphs": [""] * n})

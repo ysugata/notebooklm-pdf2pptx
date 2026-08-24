@@ -200,6 +200,54 @@ def main() -> int:
                             json.dumps(lay, ensure_ascii=False, indent=1), "utf-8")
             log.append({"id": aid, "result": "skip"})
             continue
+        if status == "restore":
+            # アイコン等の誤検出: 除去(インペイント)で背景の絵が損傷して
+            # いる可能性があるため、原本画像の該当領域を背景へ貼り戻し、
+            # 再構成テキストは空にする。反映には再変換(合成)が必要。
+            slide = prs.slides[t["slide"] - 1]
+            ok = False
+            if args.work_dir is not None and t.get("bbox"):
+                import cv2
+                page_dir = args.work_dir / "pages" / f"{t['slide']:03d}"
+                src_img = cv2.imread(str(page_dir / "source.png"))
+                bg_img = cv2.imread(str(page_dir / "background.png"))
+                if src_img is not None and bg_img is not None:
+                    x0, y0, x1, y1 = t["bbox"]
+                    pad = max(6, int((y1 - y0) * 0.5))
+                    sy0 = max(0, int(y0) - pad)
+                    sy1 = min(src_img.shape[0], int(y1) + pad)
+                    sx0 = max(0, int(x0) - pad)
+                    sx1 = min(src_img.shape[1], int(x1) + pad)
+                    bg_img[sy0:sy1, sx0:sx1] = src_img[sy0:sy1, sx0:sx1]
+                    cv2.imwrite(str(page_dir / "background.png"), bg_img)
+                    # テキストを空にする(pptx側とキャッシュ側の両方)
+                    if t.get("target"):
+                        shape = next((s for s in iter_shapes_deep(slide.shapes)
+                                      if s.shape_id == t["target"]["shape_id"]), None)
+                        if shape is not None and getattr(shape, "has_text_frame", False):
+                            for p in shape.text_frame.paragraphs:
+                                set_paragraph_text(p, "")
+                        writeback_workdir(args.work_dir, t["slide"],
+                                          t["target"]["paragraphs"],
+                                          ["" for _ in t["target"]["paragraphs"]])
+                    lay_path = page_dir / "layout.json"
+                    if lay_path.is_file():
+                        lay = json.loads(lay_path.read_text("utf-8"))
+                        for r in lay.get("review", []):
+                            if r.get("bbox") == t["bbox"] and not r.get("resolved"):
+                                r["resolved"] = "restored"
+                        lay_path.write_text(
+                            json.dumps(lay, ensure_ascii=False, indent=1), "utf-8")
+                    ok = True
+            if ok:
+                applied += 1
+                log.append({"id": aid, "result": "restored",
+                            "note": "原本画像を復元(再変換で出力へ反映)"})
+            else:
+                rejected += 1
+                log.append({"id": aid, "result": "rejected",
+                            "reason": "restore には --work-dir とタスクのbboxが必要"})
+            continue
         if status == "needs_human" or t["class"] == "C":
             held += 1
             log.append({"id": aid, "result": "needs_human"})

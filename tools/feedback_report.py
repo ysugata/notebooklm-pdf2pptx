@@ -61,7 +61,7 @@ def main() -> int:
         status = res.get("result") or ans.get("status") or t.get("status") or "open"
         if status in ("needs_human",):
             buckets["needs_human"].append((t, ans, res))
-        elif status == "applied":
+        elif status in ("applied", "restored"):
             buckets["applied"].append((t, ans, res))
         elif status == "skip":
             buckets["skip"].append((t, ans, res))
@@ -92,7 +92,7 @@ summary{cursor:pointer;font-weight:bold}</style>"""]
         parts.append('<p>各欄に記入して最後の「回答をまとめてコピー」を押し、'
                      "そのままチャットや依頼元へ貼り付けてください。"
                      "分からない項目は空欄のままで構いません。"
-                     "「そのまま」「消す」「保留」という回答も使えます。</p>")
+                     "文字ではなくアイコン・絵の場合は「元に戻す」と書いてください(原本の絵をそのまま復元します)。「そのまま」「消す」「保留」も使えます。</p>")
     for t, ans, res in buckets["needs_human"]:
         cur = " / ".join(t["target"]["paragraphs"]) if t.get("target") else "(図形未特定)"
         parts.append(f'<div class="card"><span class="id">{e(t["id"])} — スライド{t["slide"]}</span>'
@@ -102,7 +102,7 @@ summary{cursor:pointer;font-weight:bold}</style>"""]
                      f"{('<div>備考: ' + e(t.get('note','')) + '</div>') if t.get('note') else ''}"
                      f'<div class="q">→ 正しい文言: <input class="ans" data-id="{e(t["id"])}" '
                      'style="width:70%;padding:4px;font-size:1em" '
-                     'placeholder="正しい文言 / そのまま / 消す / 保留"></div></div>')
+                     'placeholder="正しい文言 / そのまま / 消す / 元に戻す / 保留"></div></div>')
     if buckets["needs_human"]:
         tasks_sha = None
         sha_file = base / "tasks.sha256"

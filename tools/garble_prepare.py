@@ -103,6 +103,7 @@ def main() -> int:
                 "id": f"g{page:03d}_{n}",
                 "slide": page,
                 "class": "A",
+                "bbox": [round(v, 1) for v in r["bbox"]] if r.get("bbox") else None,
                 "marker_text": r.get("reason") or "低信頼OCR行",
                 "marker_shape_id": None,
                 "target": None,
