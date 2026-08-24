@@ -132,6 +132,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("pptx", type=Path)
     ap.add_argument("--out-dir", type=Path, default=ROOT / "feedback_work")
+    ap.add_argument("--work-dir", type=Path, default=None,
+                    help="変換時のworkディレクトリ。指定すると除去前の原本画像"
+                         "(pages/NNN/source.png)からも切り抜きを作る(判断精度向上)")
     args = ap.parse_args()
 
     rules = load_rules()
@@ -225,6 +228,27 @@ def main() -> int:
                     cp = crops_dir / f"{t['id']}.png"
                     cv2.imwrite(str(cp), img[py0:py1, px0:px1])
                     t["crop"] = str(cp.relative_to(out))
+                # 除去前の原本画像からの切り抜き(最重要の判断根拠)。
+                # 編集可能化後の描画はOCRの推測を写しただけだが、
+                # 原本ピクセルには崩れ字の実際の形が残っている。
+                if args.work_dir is not None:
+                    src_png = args.work_dir / "pages" / f"{t['slide']:03d}" / "source.png"
+                    if src_png.is_file():
+                        simg = cv2.imread(str(src_png))
+                        if simg is not None:
+                            sh_, sw_ = simg.shape[:2]
+                            sx0 = max(0, int((x0 - pad) / sw * sw_))
+                            sy0 = max(0, int((y0 - pad) / sh * sh_))
+                            sx1 = min(sw_, int((x1 + pad) / sw * sw_))
+                            sy1 = min(sh_, int((y1 + pad) / sh * sh_))
+                            if sx1 - sx0 > 8 and sy1 - sy0 > 8:
+                                scp = crops_dir / f"{t['id']}_source.png"
+                                # 小さい字も読めるよう2倍に拡大して保存
+                                crop2 = cv2.resize(simg[sy0:sy1, sx0:sx1],
+                                                   (0, 0), fx=2, fy=2,
+                                                   interpolation=cv2.INTER_LANCZOS4)
+                                cv2.imwrite(str(scp), crop2)
+                                t["source_crop"] = str(scp.relative_to(out))
 
     payload = {
         "source": str(args.pptx),
