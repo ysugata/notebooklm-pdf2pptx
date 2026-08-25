@@ -107,12 +107,31 @@ def paragraphs_text(shape) -> list[str]:
     return ["".join(r.text for r in p.runs) for p in shape.text_frame.paragraphs]
 
 
+def _soffice() -> str:
+    """LibreOffice実行ファイルをOS横断で解決する。"""
+    import shutil as _shutil
+    import sys as _sys
+    found = _shutil.which("soffice")
+    if found:
+        return found
+    candidates = []
+    if _sys.platform == "win32":
+        candidates = [r"C:\Program Files\LibreOffice\program\soffice.com",
+                      r"C:\Program Files (x86)\LibreOffice\program\soffice.com"]
+    elif _sys.platform == "darwin":
+        candidates = ["/Applications/LibreOffice.app/Contents/MacOS/soffice"]
+    for c in candidates:
+        if Path(c).is_file():
+            return c
+    return "soffice"  # 最後はPATH解決に任せる(失敗時はクロップなしで続行)
+
+
 def render_slides(pptx: Path, out_dir: Path) -> dict[int, Path]:
     """LibreOfficeで全スライドをPNG化する。失敗したら空dict(クロップなし運用)。"""
     out_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as td:
         try:
-            subprocess.run(["soffice", "--headless", "--convert-to", "pdf",
+            subprocess.run([_soffice(), "--headless", "--convert-to", "pdf",
                             "--outdir", td, str(pptx)],
                            check=True, capture_output=True, timeout=600)
             pdf = next(Path(td).glob("*.pdf"))

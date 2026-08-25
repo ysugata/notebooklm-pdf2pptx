@@ -33,7 +33,49 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-SCAN_DIRS = [ROOT / "inbox", Path.home() / "Downloads"]
+
+def _downloads_dir() -> Path:
+    """OS設定を尊重した実際のダウンロードフォルダ。
+
+    Windows: レジストリのUser Shell Folders(OneDriveリダイレクト等を反映)。
+    Linux: XDG設定(user-dirs.dirs)。macOS/フォールバック: ~/Downloads。
+    """
+    import os
+    import sys as _sys
+    if _sys.platform == "win32":
+        try:
+            import winreg
+            key = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+                val, _ = winreg.QueryValueEx(
+                    k, "{374DE290-123F-4565-9164-39C4925E467B}")
+                return Path(os.path.expandvars(val))
+        except Exception:
+            pass
+    elif _sys.platform.startswith("linux"):
+        cfg = Path.home() / ".config" / "user-dirs.dirs"
+        try:
+            for line in cfg.read_text().splitlines():
+                if line.startswith("XDG_DOWNLOAD_DIR"):
+                    raw = line.split("=", 1)[1].strip().strip('"')
+                    return Path(raw.replace("$HOME", str(Path.home())))
+        except Exception:
+            pass
+    return Path.home() / "Downloads"
+
+
+def _scan_dirs() -> list[Path]:
+    """回答ファイルの探索先。環境変数 NBLM_ANSWERS_DIRS (os.pathsep区切り)で
+    共有フォルダ等を追加できる。"""
+    import os
+    dirs = [ROOT / "inbox"]
+    extra = os.environ.get("NBLM_ANSWERS_DIRS", "")
+    dirs += [Path(p) for p in extra.split(os.pathsep) if p.strip()]
+    dirs.append(_downloads_dir())
+    return dirs
+
+
+SCAN_DIRS = _scan_dirs()
 
 
 def find_answer_file(tasks_sha: str) -> Path | None:
@@ -122,7 +164,9 @@ def main() -> int:
         cands = [p for d in SCAN_DIRS if d.is_dir() for p in d.glob("answers_*.txt")]
         txt_path = max(cands, key=lambda p: p.stat().st_mtime) if cands else None
     if txt_path is None:
-        print("回答ファイルが見つかりません (inbox/ か ~/Downloads の answers_*.txt)")
+        print("回答ファイル(answers_*.txt)が見つかりません。探索先: "
+              + ", ".join(str(d) for d in SCAN_DIRS)
+              + "  (環境変数 NBLM_ANSWERS_DIRS で追加可)")
         return 2
     text = txt_path.read_text("utf-8")
     head = text.splitlines()[0] if text.splitlines() else ""
