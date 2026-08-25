@@ -21,6 +21,14 @@ NotebookLM等が生成する「画像として焼き込まれたスライド」�
 python3 bootstrap.py --with-lama --with-fonts
 ```
 
+Pythonが入っていないPCでは、代わりに次を実行(自動でPythonから導入):
+
+```bash
+# Windows: setup.bat をダブルクリック
+# macOS / Linux:
+sh setup.sh
+```
+
 - Python 3.10〜3.12 推奨。Mac (Apple Silicon/Intel) / Windows / WSL2。
 - `--with-lama`: 複雑背景(写真・グロー)の高品質テキスト除去 (LaMa/IOPaint、ローカル実行)。
   省略すると古典インペイントで代替(品質は落ちるが依存が軽い)。

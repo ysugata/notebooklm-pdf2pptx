@@ -2,6 +2,8 @@
 
 > 初回セットアップ(クローン直後に一度だけ):
 > `python3 bootstrap.py --with-lama --with-fonts`
+> Python自体が無いPCは `setup.bat`(Windows)/`sh setup.sh`(macOS/Linux)が
+> Pythonの導入から面倒を見る。
 > 以後のコマンドはすべて `.venv/bin/python`(Windowsは `.venv\Scripts\python`)を使う。
 
 このリポジトリで「注記(修正指示)つきPPTX」を処理するときの手順。
