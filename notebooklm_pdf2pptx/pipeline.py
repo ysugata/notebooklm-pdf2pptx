@@ -134,6 +134,10 @@ class Converter:
         # layout.jsonにも再適用する。冪等(適用済みなら素通り)。
         self._replay_fix_ledger(pages_dir)
 
+        # 合成時textfixパス: 解析後に増えた辞書・学習・あいまい照合を
+        # キャッシュ済みレイアウトへも適用する(再解析不要で知識が届く)
+        self._apply_textfix_pass(pages_dir)
+
         # 自動トリアージ: 機械的に「正しい」と検証できるreviewを自動確認し、
         # 人に回る確認作業を最小化する(人手回答242件の正解データで較正済み)
         self._auto_triage_reviews(pages_dir)
@@ -673,6 +677,45 @@ class Converter:
         if n_changed:
             print(f"フォント調和: {n_changed}行を多数派族"
                   f"({'/'.join(dominant.values())})へ統一", flush=True)
+
+    def _apply_textfix_pass(self, pages_dir: Path) -> None:
+        """キャッシュ済みレイアウトへ現在のtextfix知識を適用する。
+
+        文字化け修正は解析段のフックで行われるため、解析後に学習・同梱辞書・
+        あいまい照合が強化されてもキャッシュ済みページには届かない。
+        合成のたびにこのパスが差分だけを適用する(冪等。修正はreviewに記録)。
+        """
+        if not self.textfix.available:
+            return
+        n_fixed = 0
+        for lay_path in sorted(pages_dir.glob("*/layout.json")):
+            lay = json.loads(lay_path.read_text("utf-8"))
+            dirty = False
+            for block in lay.get("blocks", []):
+                for ln in block["lines"]:
+                    fixed, notes = self.textfix.apply(ln["text"])
+                    if fixed == ln["text"]:
+                        continue
+                    old = ln["text"]
+                    ln["text"] = fixed
+                    lay.setdefault("review", []).append({
+                        "text": fixed,
+                        "confidence": ln.get("confidence", 0.0),
+                        "bbox": ln.get("ink_bbox"),
+                        "reason": "文字化け予測修正: " + ", ".join(
+                            f"{a[:12]}→{b[:12]}" for a, b in notes)})
+                    # 旧本文を指す未解決reviewは置き換え済みとして解決
+                    for r in lay.get("review", []):
+                        if r.get("text") == old and not r.get("resolved"):
+                            r["resolved"] = True
+                    dirty = True
+                    n_fixed += 1
+            if dirty:
+                lay_path.write_text(
+                    json.dumps(lay, ensure_ascii=False, indent=1), "utf-8")
+        if n_fixed:
+            print(f"textfix追適用: {n_fixed}行をキャッシュ済みレイアウトへ反映",
+                  flush=True)
 
     def _auto_triage_reviews(self, pages_dir: Path) -> None:
         """review(要確認行)のうち機械検証で「正しい」と断定できるものを自動解決する。

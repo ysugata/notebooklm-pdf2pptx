@@ -111,6 +111,7 @@ for group in CONFUSABLE_GROUPS:
         _CONFUSABLE[ch] = "".join(c for c in group if c != ch)
 
 _KANJI_RUN = re.compile(r"[一-鿿々]{2,6}")
+_KANJI_RUNS = re.compile(r"[一-鿿々]{1,}")
 _KANJI_CHAR = re.compile(r"[一-鿿々]")
 
 
@@ -265,7 +266,7 @@ class TextRepairer:
         return result, fixes
 
     def apply(self, text: str) -> tuple[str, list[tuple[str, str]]]:
-        """フレーズ学習→正規化→形近字修復の順に適用する。"""
+        """フレーズ学習→正規化→形近字修復→フレーズあいまい照合の順に適用する。"""
         fixes: list[tuple[str, str]] = []
         # 学習済みフレーズ(過去に人間が確定した 化け文字列→正しい文言)の
         # 完全一致置換。長いものから先に照合する。
@@ -279,4 +280,33 @@ class TextRepairer:
         if self._tokenizer is not None:
             text, more = self.repair(text)
             fixes.extend(more)
+            text, more = self._snap_to_known_phrase(text)
+            fixes.extend(more)
         return text, fixes
+
+    def _snap_to_known_phrase(self, text: str) -> tuple[str, list[tuple[str, str]]]:
+        """まだ壊れている行を、既知の正しい文言へあいまい一致で寄せる。
+
+        同じ資料の別書き出し(画像の再圧縮)ではOCRの誤読が毎回微妙に
+        変わるため、完全一致のフレーズ辞書が空振りする。ゲート:
+          1. 現在の本文に壊れた漢字連続がある(健全な行は触らない)
+          2. 既知の正解文と文字一致率0.7以上・長さ差25%以内
+          3. 置換後の本文が言語的に健全(壊れrunが残るなら不採用)
+        """
+        runs = _KANJI_RUNS.findall(text)
+        if not runs or not any(self._looks_broken(r) for r in runs):
+            return text, []
+        best_sim, best = 0.0, None
+        for cand in set(self._phrases.values()):
+            if abs(len(text) - len(cand)) > max(2, len(cand) // 4):
+                continue
+            pos = sum(1 for x, y in zip(text, cand) if x == y) / max(len(text), len(cand))
+            st = len(set(text) & set(cand)) / max(len(set(text)), len(set(cand)))
+            s = max(pos, st)
+            if s > best_sim:
+                best_sim, best = s, cand
+        if best is None or best_sim < 0.7 or best == text:
+            return text, []
+        if any(self._looks_broken(r) for r in _KANJI_RUNS.findall(best)):
+            return text, []
+        return best, [(text, best)]
