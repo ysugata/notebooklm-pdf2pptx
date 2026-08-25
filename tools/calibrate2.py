@@ -154,7 +154,7 @@ def measure(pdf_path: Path) -> None:
     settings = Settings()
     library = FontLibrary(extra_dirs=[settings.fonts_dir])
     print(f"{'case':30s} {'PDFフォント':22s} {'行送り実測':>9s} {'/指定':>6s} "
-          f"{'先頭bl実測':>9s} {'writer予測':>9s} {'差pt':>6s}")
+          f"{'先頭bl実測':>9s} {'差(pp)':>7s} {'差(lo)':>7s}")
     for c in build_cases():
         a = spans.get(c["id"] + "a")
         b = spans.get(c["id"] + "b")
@@ -177,11 +177,13 @@ def measure(pdf_path: Path) -> None:
             pitch_for_model = natural_line_height_pt(face.path, face.index, c["size"])
             if c["mode"] == "pct":
                 pitch_for_model *= c["value"] / 100.0
-        fbo_pred = first_baseline_offset_pt(face.path, face.index, c["size"],
-                                            pitch_for_model)
+        pred = {p: first_baseline_offset_pt(face.path, face.index, c["size"],
+                                            pitch_for_model, profile=p)
+                for p in ("powerpoint", "libreoffice")}
         print(f"{label:30s} {a['font'][:20] + sub:22s} {pitch:9.2f} "
-              f"{ratio:6.3f} {fbo_meas:9.2f} {fbo_pred:9.2f} "
-              f"{fbo_meas - fbo_pred:+6.2f}")
+              f"{ratio:6.3f} {fbo_meas:9.2f} "
+              f"{fbo_meas - pred['powerpoint']:+7.2f} "
+              f"{fbo_meas - pred['libreoffice']:+7.2f}")
         dx = a["x"] - c["left_px"] * PT_PER_PX
         if abs(dx) > 1.5:
             print(f"{'':30s} 注意: 左端が指定と{dx:+.1f}ptずれ(インセット差?)")

@@ -44,6 +44,9 @@ def main() -> None:
                              "フォントを選ぶ(他PCへ渡すと崩れる可能性)")
     parser.add_argument("--ocr-model", choices=["small", "medium"], default="small",
                         help="OCR認識モデル。medium=高精度(日本語+2.3%%)だが低速")
+    parser.add_argument("--renderer-profile", choices=["powerpoint", "libreoffice"],
+                        default="powerpoint",
+                        help="出力を開くレンダラ(行レイアウトの実測則を切替)")
     args = parser.parse_args()
 
     settings = Settings()
@@ -51,6 +54,7 @@ def main() -> None:
     settings.inpaint = args.inpaint
     settings.qa_enabled = not args.no_qa
     settings.ocr_model_type = args.ocr_model
+    settings.renderer_profile = args.renderer_profile
     if args.local_fonts:
         settings.non_portable_penalty = 0.0
     if args.work_dir is not None:

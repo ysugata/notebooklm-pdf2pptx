@@ -54,6 +54,11 @@ class Settings:
     work_dir: Path = PROJECT_ROOT / "work"
     fonts_dir: Path = PROJECT_ROOT / "fonts"
 
+    # compose
+    # 出力を開くレンダラの行レイアウト実測則 (pptx_writer.RENDERER_PROFILES)。
+    # 納品先の標準であるPowerPointが既定。LibreOffice/Impressで開く場合はlibreoffice。
+    renderer_profile: str = "powerpoint"
+
     # acquire
     render_scale: float = 2.0        # 全面画像でないページのレンダリング倍率 (72dpi基準)
     full_page_image_coverage: float = 0.90  # これ以上を占める1枚画像なら「全面画像ページ」

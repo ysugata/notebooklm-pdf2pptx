@@ -48,18 +48,32 @@ def _win_metrics_pt(font_path: str, font_index: int, size_pt: float) -> tuple[fl
     return ascent / upem * size_pt, descent / upem * size_pt
 
 
-def first_baseline_offset_pt(font_path: str, font_index: int, size_pt: float,
-                             exact_spacing_pt: float | None) -> float:
-    """テキストボックス上端(マージン0)から最初のベースラインまでの距離。
+# 行高固定(spcPts)時の先頭ベースライン位置のレンダラ別実測則。
+# tools/calibrate2.py でエクスポートPDFのベースライン座標を直読して特定
+# (docs/DESIGN.md「行レイアウトの較正結果」)。いずれもフォントメトリクス非依存:
+#   powerpoint:  0.76×行高 (13ケース rms 0.29pt / 96dpi量子化ノイズ内)
+#   libreoffice: 行高 − 0.2×フォントサイズ (16ケース ±0.05pt)
+RENDERER_PROFILES = ("powerpoint", "libreoffice")
+_renderer_profile = "powerpoint"
 
-    行高固定(spcPts)時のLibreOffice実測則(tools/calibrate2.py、16ケースの
-    PDFベースライン座標で±0.03pt一致): baseline = 行高 − 0.2×フォントサイズ。
-    ディセント扱いはフォントメトリクス非依存の固定20%。
-    """
+
+def set_renderer_profile(name: str) -> None:
+    global _renderer_profile
+    if name not in RENDERER_PROFILES:
+        raise ValueError(f"未知のレンダラプロファイル: {name} (候補: {RENDERER_PROFILES})")
+    _renderer_profile = name
+
+
+def first_baseline_offset_pt(font_path: str, font_index: int, size_pt: float,
+                             exact_spacing_pt: float | None,
+                             profile: str | None = None) -> float:
+    """テキストボックス上端(マージン0)から最初のベースラインまでの距離。"""
     if exact_spacing_pt is None:
         ascent, _descent = _win_metrics_pt(font_path, font_index, size_pt)
         return ascent
-    return exact_spacing_pt - 0.2 * size_pt
+    if (profile or _renderer_profile) == "libreoffice":
+        return exact_spacing_pt - 0.2 * size_pt
+    return 0.76 * exact_spacing_pt
 
 
 def natural_line_height_pt(font_path: str, font_index: int, size_pt: float) -> float:
@@ -170,6 +184,7 @@ def _set_exact_line_spacing(paragraph, spacing_pt: float) -> None:
 # ---------------------------------------------------------------- main builder
 def build_presentation(processed: list[dict], pages_dir: Path, output_path: Path,
                        settings: Settings, library: FontLibrary) -> dict:
+    set_renderer_profile(getattr(settings, "renderer_profile", "powerpoint"))
     presentation = Presentation()
     first = min(processed, key=lambda r: r["number"])
     if first.get("slide_emu"):
