@@ -67,7 +67,8 @@ def main() -> int:
         res = results.get(aid, {})
         ans = answers.get(aid, {})
         status = res.get("result") or ans.get("status") or t.get("status") or "open"
-        if status in ("needs_human",):
+        if status in ("needs_human", "open"):
+            # 未回答(open)も「要判断」としてフォームに載せる
             buckets["needs_human"].append((t, ans, res))
         elif status in ("applied", "restored", "erased"):
             buckets["applied"].append((t, ans, res))
