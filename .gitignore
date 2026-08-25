@@ -14,3 +14,4 @@ runs/
 inbox/
 outbox/
 rules/learned_*.json
+attic/
