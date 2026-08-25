@@ -675,9 +675,15 @@ class Converter:
 
         エージェント/人間が適用した文字修正は台帳に永続化されており、
         キャッシュのバージョンアップ等でページがフル再解析されても
-        ここで再適用されるため失われない。行テキストが台帳のbeforeと
-        完全一致する場合のみ置換する(既に適用済み・本文が変わった場合は
-        素通り)。reviewの該当エントリにはresolvedを立てる。
+        ここで再適用されるため失われない。照合は次の順で行う:
+          1. ブロック全行が before と完全一致 → after へ置換
+          2. 行単位で before_i と完全一致、または「before_i→after_i の
+             文字差分を一部だけ適用した状態」(同長・全位置が新旧いずれか
+             の文字) → after_i へ置換。学習済みルールの自己修復で
+             ブロック一致・行一致が外れた場合を拾う
+          3. 行が既に after_i と一致(空白差は無視) → after_i へ正規化
+        いずれもreviewの該当エントリにresolvedを立てる。どれにも一致
+        しない(本文が別物に変わった)場合のみ素通りし、reviewは残る。
         """
         ledger = self.settings.work_dir / "fixes_ledger.jsonl"
         if not ledger.is_file():
@@ -696,25 +702,68 @@ class Converter:
                 continue
             lay = json.loads(lay_path.read_text("utf-8"))
             dirty = False
+            def norm(s: str) -> str:
+                return "".join(s.split())
+
+            def partial_of(cur: str, old: str, new: str) -> bool:
+                """curが「old→newの文字差分を一部だけ適用した状態」か。
+
+                学習済みルールが再解析時に差分の一部の文字を先に直すと、
+                beforeともafterとも一致しなくなる。同じ長さで全位置が
+                old側かnew側の文字なら、部分適用と断定できる。
+                """
+                if not (len(cur) == len(old) == len(new)) or cur == old:
+                    return False
+                return all(c in (o, n) for c, o, n in zip(cur, old, new))
+
             for e in entries:
                 before, after = e["before"], e["after"]
                 hit = False
+                replaced: list[str] = []  # 置換前の行本文(review解決用)
                 for block in lay.get("blocks", []):
                     texts = [ln["text"] for ln in block["lines"]]
                     if texts == before:
                         for ln, new in zip(block["lines"], after):
                             ln["text"] = new
+                        replaced += [t for t, n2 in zip(texts, after) if t != n2]
                         dirty = True
                         hit = True
                         n_applied += 1
                         break
                 if not hit:
+                    # 行単位のフォールバック: 学習済みルールの自己修復で
+                    # 同ブロックの他行が変わるとブロック一致が外れるため、
+                    # 行ごとに 完全一致 / 部分適用 / 空白差のみ を照合する
+                    for old, new in zip(before, after):
+                        if old == new:
+                            continue
+                        for block in lay.get("blocks", []):
+                            for ln in block["lines"]:
+                                cur = ln["text"]
+                                if cur == new:
+                                    continue
+                                if cur == old or partial_of(cur, old, new) \
+                                        or norm(cur) == norm(new):
+                                    ln["text"] = new
+                                    replaced.append(cur)
+                                    dirty = True
+                                    hit = True
+                    if hit:
+                        n_applied += 1
+                if not hit:
                     # 指し先がネイティブ図形だった修正: native_*.xmlへリプレイ
                     if self._replay_to_native(lay_path.parent, before, after):
                         n_applied += 1
+                # review解決: 台帳のbefore・実際に置換した行本文・
+                # 修正後文字列(=学習済みルールが自己到達した行)のいずれか
                 changed = {old for old, new in zip(before, after) if old != new}
+                changed.update(replaced)
+                resolved_norm = {norm(new) for old, new in zip(before, after)
+                                 if old != new}
                 for r in lay.get("review", []):
-                    if r.get("text") in changed and not r.get("resolved"):
+                    if r.get("resolved"):
+                        continue
+                    if r.get("text") in changed or norm(r.get("text", "")) in resolved_norm:
                         r["resolved"] = True
                         dirty = True
             if dirty:
