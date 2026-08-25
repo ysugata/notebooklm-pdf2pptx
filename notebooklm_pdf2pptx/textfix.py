@@ -25,19 +25,28 @@ LEARNED_DIR = Path(__file__).resolve().parent.parent / "rules"
 
 
 def _load_learned() -> tuple[list[tuple[str, str]], dict[str, str]]:
+    """2層の修正知識を読み込む。
+
+    builtin_*.json: リポジトリ同梱の審査済み辞書(全環境共通)。
+    learned_*.json: この環境での回答から自動学習した分(git管理外)。
+    学習分が後勝ち。builtinへの昇格は人が中身を確認してからコミットする。
+    """
     pairs: list[tuple[str, str]] = []
     phrases: dict[str, str] = {}
-    try:
-        data = json.loads((LEARNED_DIR / "learned_confusables.json").read_text("utf-8"))
-        pairs = [(a, b) for a, b in data.get("pairs", []) if a != b]
-    except Exception:
-        pass
-    try:
-        phrases = {k: v for k, v in json.loads(
-            (LEARNED_DIR / "learned_phrases.json").read_text("utf-8")).items()
-            if k != v and len(k) >= 3}
-    except Exception:
-        pass
+    for stem in ("builtin", "learned"):
+        try:
+            data = json.loads(
+                (LEARNED_DIR / f"{stem}_confusables.json").read_text("utf-8"))
+            pairs += [(a, b) for a, b in data.get("pairs", []) if a != b]
+        except Exception:
+            pass
+        try:
+            phrases.update(
+                {k: v for k, v in json.loads(
+                    (LEARNED_DIR / f"{stem}_phrases.json").read_text("utf-8")
+                 ).items() if k != v and len(k) >= 3})
+        except Exception:
+            pass
     return pairs, phrases
 
 # --- 1. 異体字・簡体字・旧字体 → 日本標準字体 (無条件で安全な写像のみ) ---
