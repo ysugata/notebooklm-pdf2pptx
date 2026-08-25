@@ -5,7 +5,7 @@ CodexはこのAGENTS.mdを自動で読む(スキル機能は不要)。依頼は3
 | 依頼の言葉 | やること |
 |---|---|
 | 「編集できるパワポにして」 | `.venv/bin/python convert.py "<入力>" -o "<入力名>_editable.pptx" --inpaint auto --work-dir "work_<資料名>"`。入力はPDF/画像/ほぼ画像のPPTX。完了後 `tools/smoke_test.py <出力> --pages-dir <work>/pages` で健全性確認 |
-| 「文字化けを直して」 | ①`tools/garble_prepare.py <出力pptx> --work-dir <work> --out-dir <work>/feedback` でタスク化(自動修正・トリアージも適用される)。②**既定: 残った要判断はその場のチャットで1件ずつ選択式に質問する**(画像を `open crops/<id>_source.png` で見せ、1=予測を反映 / 2=そのまま / 3=消す / 4=画像のまま / 5=文言入力)。集めた回答を answers.json にして apply→report。③ユーザーが「後で」と言った場合・対話できない実行(exec等)の場合のみ: 画像を読んで確信分は fix、有力な読みは suggestions.json に書き、`feedback_report.py --open` でレポートに引き継ぐ。詳細は「対話式回答」節 |
+| 「文字化けを直して」 | ①`tools/garble_prepare.py <出力pptx> --work-dir <work> --out-dir <work>/feedback` でタスク化(自動修正・トリアージも適用される)。②各タスクの crops/<id>_source.png を実際に見て、確信できる修正は answers に fix、有力な読みは `suggestions.json` に `{"id": "推測文言"}`、読めないものは needs_human。③apply→`feedback_report.py --open` でレポートを自動表示(人はレポートの選択式UIで採否を決める。選択パネル式のチャット回答はClaude側の機能で、Codexでは行わない) |
 | 「修正指示を反映して」 | 以下の「修正指示の反映ワークフロー」手順1〜5 |
 
 ## リポジトリの地図
@@ -124,16 +124,12 @@ CodexでもClaude Codeでも同じ。**エージェントの自由裁量は answ
 を編集する。コードは触らない。
 
 
-## 対話式回答(これが既定)
+## チャット選択式について(役割分担)
 
-要判断が残ったら、**既定ではCodexのチャットで選択式に回答を集める**。
-「後で答える」と言われた場合のみHTMLレポート(自動で開く)に任せる:
-1. 各タスクの切り抜き画像をOSのビューアで開いて見せる
-   (macOS: `open crops/<id>_source.png` / Windows: `start ...`)
-2. チャットで番号選択式に質問する(1=予測を反映: <suggested> /
-   2=そのまま / 3=消す / 4=画像のまま残す / 5=正しい文言を入力)
-3. 回答を answers.json に集約し、通常どおり適用→レポート生成
-4. 回答数+保留数 = タスク数N を確認してから終了する
+画像をチャット内に表示し選択肢パネルで1件ずつ答えていく対話式回答は
+**Claude Code側の機能**(AskUserQuestion)で、Codexには同等のUIが無い。
+Codexは上記の自律フロー(fix+suggestions+レポート自動表示)までを担い、
+採否の選択はレポートの選択式UIに委ねる。
 
 ## 回答ファイルの自動取り込み
 
