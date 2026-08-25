@@ -11,7 +11,7 @@ Downloads / inbox から発見し、人手なしで適用まで進める:
      (本文の不変性はapply側が検証するので安全)
   4. 背景に触れる適用(元に戻す/領域消去)があれば再変換まで実行
   5. レポートを更新し、回答ファイルを inbox/processed/ へ整理
-  6. 各段階の結果をOS通知で知らせる(macOS)
+  6. 各段階の結果をOS通知で知らせる(macOS/Windows/Linux)
 
 登録が無いハッシュのファイルは触らず通知のみ(別資料の回答を
 誤適用しないため)。手動実行も可: .venv/bin/python tools/answers_autoingest.py
@@ -29,23 +29,65 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 from answers_ingest import _scan_dirs  # noqa: E402
 
-PY = str(ROOT / ".venv" / "bin" / "python")
-if not Path(PY).is_file():
-    PY = sys.executable
+def _venv_python() -> str:
+    for c in (ROOT / ".venv" / "bin" / "python",
+              ROOT / ".venv" / "Scripts" / "python.exe"):
+        if c.is_file():
+            return str(c)
+    return sys.executable
+
+
+PY = _venv_python()
 LOCK = ROOT / "runs" / "autoingest.lock"
+TITLE = "スライド変換: 回答取り込み"
 
 
 def notify(message: str) -> None:
     print(message, flush=True)
-    if sys.platform == "darwin":
-        try:
+    try:
+        if sys.platform == "darwin":
             subprocess.run(
                 ["osascript", "-e",
-                 'display notification "{}" with title "スライド変換: 回答取り込み"'
-                 .format(message.replace('"', "'"))],
+                 'display notification "{}" with title "{}"'
+                 .format(message.replace('"', "'"), TITLE)],
                 timeout=10)
+        elif sys.platform == "win32":
+            ps = ("Add-Type -AssemblyName System.Windows.Forms; "
+                  "Add-Type -AssemblyName System.Drawing; "
+                  "$n = New-Object System.Windows.Forms.NotifyIcon; "
+                  "$n.Icon = [System.Drawing.SystemIcons]::Information; "
+                  "$n.Visible = $true; "
+                  "$n.ShowBalloonTip(10000, '{}', '{}', 'Info')"
+                  .format(TITLE.replace("'", "''"),
+                          message.replace("'", "''")))
+            subprocess.run(["powershell", "-NoProfile", "-WindowStyle",
+                            "Hidden", "-Command", ps], timeout=15)
+        else:
+            subprocess.run(["notify-send", TITLE, message], timeout=10)
+    except Exception:
+        pass
+
+
+def _pid_alive(pid: int) -> bool:
+    """他OSでも安全なプロセス生存確認。
+
+    注意: Windowsの os.kill(pid, 0) は既知シグナル以外を
+    TerminateProcess として扱い対象を殺してしまうため使えない。
+    """
+    if sys.platform == "win32":
+        try:
+            r = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"],
+                               capture_output=True, text=True, timeout=10)
+            return str(pid) in r.stdout
         except Exception:
-            pass
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
 
 
 def run(cmd: list[str]) -> tuple[int, str]:
@@ -170,14 +212,17 @@ def process(txt: Path, reg: dict[str, dict]) -> None:
 
 
 def main() -> int:
-    # 多重起動防止(launchdはDownloadsの変化ごとに起動するため)
+    # 多重起動防止(フォルダ変化・定期実行のたびに起動されるため)。
+    # 30分より古いロックはクラッシュ残骸とみなして無視する
     if LOCK.is_file():
+        import time
+        fresh = (time.time() - LOCK.stat().st_mtime) < 1800
         try:
             pid = int(LOCK.read_text())
-            os.kill(pid, 0)
+        except ValueError:
+            pid = -1
+        if fresh and pid > 0 and _pid_alive(pid):
             return 0  # 実行中
-        except (ValueError, ProcessLookupError, PermissionError):
-            pass
     LOCK.parent.mkdir(parents=True, exist_ok=True)
     LOCK.write_text(str(os.getpid()))
     try:
