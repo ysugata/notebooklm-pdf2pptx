@@ -138,6 +138,11 @@ class Converter:
         # キャッシュ済みレイアウトへも適用する(再解析不要で知識が届く)
         self._apply_textfix_pass(pages_dir)
 
+        # 画像裁定: 言語検証が効かない行(数字・欧文・断片)を、候補を実描画して
+        # 元画像と照合し機械が確定する。壊れた和文は画像一致でも確認しない
+        # (入力画像自体がAI崩れ字を含む前提のため、和文の正否は言語が主審)
+        self._image_arbitrate_reviews(pages_dir)
+
         # 自動トリアージ: 機械的に「正しい」と検証できるreviewを自動確認し、
         # 人に回る確認作業を最小化する(人手回答242件の正解データで較正済み)
         self._auto_triage_reviews(pages_dir)
@@ -677,6 +682,135 @@ class Converter:
         if n_changed:
             print(f"フォント調和: {n_changed}行を多数派族"
                   f"({'/'.join(dominant.values())})へ統一", flush=True)
+
+    # 欧文・数字のOCR定番混同(画像裁定の候補生成用)
+    _LATIN_CONFUSIONS = {
+        "B": "8ER", "8": "B3", "E": "B", "I": "1lT", "1": "Il7", "l": "1I",
+        "O": "0DQ", "0": "OD", "S": "5", "5": "S", "G": "6C", "6": "G",
+        "Z": "2", "2": "Z", "M": "NW", "N": "M", "W": "M", "D": "O0",
+        "Q": "O", "C": "G", "g": "9", "9": "g4", "4": "9", "7": "1",
+        "3": "8", "V": "UY", "U": "V", "rn": "m",
+    }
+
+    def _image_arbitrate_reviews(self, pages_dir: Path) -> None:
+        """言語検証が効かない行を、元画像との照合(NCC)で機械確定する。
+
+        前提: 入力画像自体がAI崩れ字を含みうるため、画像一致は
+        「和文の正しさ」の証明にならない。よって画像の管轄は
+        **言語で判定できない行(数字・欧文・2文字以下の断片)だけ**:
+        混同表・端1文字削除の候補を実描画してNCC比較し、
+        +0.05以上良ければ置換、現行が十分高ければ(≥0.72)確認する。
+        壊れた和文には画像裁定を適用しない(化けた画像に一層忠実な
+        稀少字を選んでしまう誤裁定を実測で確認済み。和文の正否は
+        言語検証=textfix側が主審)。
+        """
+        import re
+        import cv2
+        from types import SimpleNamespace
+        from .solver import refine_by_template
+
+        jp_re = re.compile(r"[ぁ-ヿ一-鿿々]")
+
+        def line_of(lay, r):
+            lines = [ln for b in lay.get("blocks", []) for ln in b["lines"]]
+            for ln in lines:
+                if ln["text"] == r.get("text"):
+                    return ln
+            rb = r.get("bbox")
+            if not rb:
+                return None
+            cx, cy = (rb[0] + rb[2]) / 2, (rb[1] + rb[3]) / 2
+            best, bd = None, 1e9
+            for ln in lines:
+                ib = ln.get("ink_bbox")
+                if not ib:
+                    continue
+                d = abs((ib[0] + ib[2]) / 2 - cx) + abs((ib[1] + ib[3]) / 2 - cy)
+                if d < bd:
+                    bd, best = d, ln
+            return best if bd < 30 else None
+
+        def score(image, text, ln, pt_per_px):
+            ib = ln["ink_bbox"]
+            ink = SimpleNamespace(ink_bbox=ib, ink_w=ib[2] - ib[0],
+                                  color=ln.get("color", [0, 0, 0]))
+            face = SimpleNamespace(path=ln["font_path"], index=ln["font_index"],
+                                   bind_bold=bool(ln.get("bold")))
+            style = SimpleNamespace(size_pt=ln["size_pt"], color=None,
+                                    gradient=None, score=0.0, width_error=0.0,
+                                    missing=[])
+            size_px = max(7, int(round(ln["size_pt"] / pt_per_px)))
+            try:
+                out = refine_by_template(image, text, face, style, ink,
+                                         pt_per_px, self.settings,
+                                         size_lock_px=size_px)
+            except Exception:
+                return None
+            return out[1] if out else None
+
+        def candidates_for(text):
+            cands = []
+            for i, ch in enumerate(text):
+                for rep in self._LATIN_CONFUSIONS.get(ch, ""):
+                    cands.append(text[:i] + rep + text[i + 1:])
+            if len(text) >= 3:
+                cands.append(text[1:])   # 行頭に別要素のインクが混入
+                cands.append(text[:-1])  # 行末に混入
+            return list(dict.fromkeys(cands))[:60]
+
+        n_fixed = n_confirmed = 0
+        for lay_path in sorted(pages_dir.glob("*/layout.json")):
+            lay = json.loads(lay_path.read_text("utf-8"))
+            pending = [r for r in lay.get("review", []) if not r.get("resolved")
+                       and (r.get("reason", "") == ""
+                            or "未認識のインク" in r.get("reason", ""))]
+            if not pending:
+                continue
+            image = cv2.imread(str(lay_path.parent / "source.png"))
+            if image is None:
+                continue
+            pt_per_px = lay.get("pt_per_px")
+            dirty = False
+            for r in pending:
+                text = (r.get("text") or "").strip()
+                ln = line_of(lay, r)
+                if not text or ln is None or not ln.get("font_path"):
+                    continue
+                has_jp = bool(jp_re.search(text))
+                lang_blind = (not has_jp) or (len(text) <= 2)
+                if not lang_blind:
+                    continue  # 和文は言語検証(textfix/トリアージ)の管轄
+                base = score(image, ln["text"], ln, pt_per_px)
+                if base is None:
+                    continue
+                best_txt, best_ncc = None, base
+                for cand in candidates_for(ln["text"]):
+                    s = score(image, cand, ln, pt_per_px)
+                    if s is not None and s > best_ncc + 0.05 and s >= 0.40:
+                        best_txt, best_ncc = cand, s
+                if best_txt is not None:
+                    old = ln["text"]
+                    ln["text"] = best_txt
+                    r["resolved"] = True
+                    lay.setdefault("review", []).append({
+                        "text": best_txt, "confidence": r.get("confidence", 0),
+                        "bbox": ln.get("ink_bbox"), "resolved": "auto_image",
+                        "old_text": old,
+                        "reason": f"画像照合修正: {old[:14]}→{best_txt[:14]} "
+                                  f"(NCC {base:.2f}→{best_ncc:.2f})"})
+                    dirty = True
+                    n_fixed += 1
+                elif base >= 0.72:
+                    # 言語で判定できない行は、画像との高一致をもって確認
+                    r["resolved"] = "auto_image_verified"
+                    dirty = True
+                    n_confirmed += 1
+            if dirty:
+                lay_path.write_text(
+                    json.dumps(lay, ensure_ascii=False, indent=1), "utf-8")
+        if n_fixed or n_confirmed:
+            print(f"画像裁定: 修正{n_fixed}件 / 画像一致で確認{n_confirmed}件",
+                  flush=True)
 
     def _apply_textfix_pass(self, pages_dir: Path) -> None:
         """キャッシュ済みレイアウトへ現在のtextfix知識を適用する。
