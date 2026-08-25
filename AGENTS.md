@@ -11,7 +11,8 @@ CodexはこのAGENTS.mdを自動で読む(スキル機能は不要)。依頼は3
 # 修正指示の反映ワークフロー
 
 > 初回セットアップ(クローン直後に一度だけ):
-> `python3 bootstrap.py --with-lama --with-fonts`
+> `python3 bootstrap.py --with-lama --with-fonts --with-mlm`
+> (--with-mlm は文脈による文字化け修正モデル約440MB。無くても動くが修復力が下がる)
 > Python自体が無いPCは `setup.bat`(Windows)/`sh setup.sh`(macOS/Linux)が
 > Pythonの導入から面倒を見る。
 > 以後のコマンドはすべて `.venv/bin/python`(Windowsは `.venv\Scripts\python`)を使う。

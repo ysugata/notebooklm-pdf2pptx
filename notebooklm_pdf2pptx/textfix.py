@@ -129,6 +129,56 @@ def normalize_variants(text: str) -> tuple[str, list[tuple[str, str]]]:
     return "".join(out), fixes
 
 
+
+class _MlmScorer:
+    """ローカル日本語MLM(文字レベルDeBERTa)による文脈スコアリング。
+
+    ku-nlp/deberta-v2-base-japanese-char-wwm (CC-BY-SA 4.0, 0.1Bパラメータ、
+    全文字22k語彙・MeCab不要)。CPUで1マスクあたり数十ms。
+    依存(torch/transformers)が無い環境では呼び出し側が無効化する。
+    """
+
+    MODEL = "ku-nlp/deberta-v2-base-japanese-char-wwm"
+
+    def __init__(self) -> None:
+        import torch
+        from transformers import AutoTokenizer, AutoModelForMaskedLM
+        self._torch = torch
+        self._tok = AutoTokenizer.from_pretrained(self.MODEL)
+        self._model = AutoModelForMaskedLM.from_pretrained(self.MODEL)
+        self._model.eval()
+        torch.set_grad_enabled(False)
+        self._memo: dict[tuple[str, int], dict[str, float]] = {}
+
+    def char_probs(self, text: str, pos: int) -> dict[str, float]:
+        """textのpos文字をマスクしたときの、その位置の文字→確率。"""
+        key = (text, pos)
+        if key in self._memo:
+            return self._memo[key]
+        masked = text[:pos] + self._tok.mask_token + text[pos + 1:]
+        enc = self._tok(masked, return_tensors="pt", truncation=True,
+                        max_length=126)
+        mask_idx = (enc["input_ids"][0]
+                    == self._tok.mask_token_id).nonzero()
+        if len(mask_idx) == 0:
+            self._memo[key] = {}
+            return {}
+        logits = self._model(**enc).logits[0, int(mask_idx[0])]
+        probs = self._torch.softmax(logits, dim=-1)
+        top = self._torch.topk(probs, 120)
+        out = {}
+        for p, idx in zip(top.values.tolist(), top.indices.tolist()):
+            token = self._tok.convert_ids_to_tokens(idx)
+            ch = token[-1] if token else ""
+            if len(token.lstrip("\u2581")) == 1:
+                out[token.lstrip("\u2581")] = max(
+                    out.get(token.lstrip("\u2581"), 0.0), p)
+            elif len(ch) == 1:
+                out[ch] = max(out.get(ch, 0.0), p)
+        self._memo[key] = out
+        return out
+
+
 class TextRepairer:
     """辞書検証つきの形近字修復 (SudachiPyがある場合のみ有効)。"""
 
@@ -145,6 +195,8 @@ class TextRepairer:
         learned_pairs, self._phrases = _load_learned()
         self._glyph = None  # 字形類似インデックス(遅延構築。フォント無し環境ではNone)
         self._glyph_tried = False
+        self._mlm = None    # 文脈スコアラ(遅延ロード。torch無し環境ではNone)
+        self._mlm_tried = False
         self._confusable = {k: v for k, v in _CONFUSABLE.items()}
         for a, b in learned_pairs:
             if _KANJI_CHAR.match(a) and _KANJI_CHAR.match(b):
@@ -305,7 +357,82 @@ class TextRepairer:
             fixes.extend(more)
             text, more = self._snap_to_known_phrase(text)
             fixes.extend(more)
+            text, more = self._mlm_rescue(text)
+            fixes.extend(more)
         return text, fixes
+
+    def _mlm_scorer(self):
+        if not self._mlm_tried:
+            self._mlm_tried = True
+            try:
+                self._mlm = _MlmScorer()
+            except Exception:
+                self._mlm = None
+        return self._mlm
+
+    def _mlm_rescue(self, text: str, max_fixes: int = 4) -> tuple[str, list[tuple[str, str]]]:
+        """辞書修復で治らなかった壊れ漢字を、文脈×字形の雑音チャネルで直す。
+
+        文献の定石(候補は字形類似で生成、採用は言語モデルで判定)の実装。
+        過修正(文脈だけで別の自然な文へ書き換える)を防ぐゲート:
+          1. 壊れた位置しか触らない(健全な行・位置は対象外)
+          2. 候補は観測字と字形が近い字+既知の形近ペアに限定
+          3. 文脈確率が十分高く(≥0.20)、観測字の3倍以上のときのみ採用
+          4. 置換後に行品質が悪化したら全て取り消す
+        """
+        runs = _KANJI_RUNS.findall(text)
+        if not runs or not any(self._looks_broken(r) for r in runs):
+            return text, []
+        mlm = self._mlm_scorer()
+        if mlm is None:
+            return text, []
+        base_q = self._quality(text)
+        result = text
+        fixes: list[tuple[str, str]] = []
+        for _ in range(max_fixes):
+            ms, is_single, _oov, _pairs = self._analyze(result)
+            in_pair = [False] * len(ms)
+            for i in range(len(ms) - 1):
+                if is_single[i] and is_single[i + 1]:
+                    in_pair[i] = in_pair[i + 1] = True
+            broken_pos: set[int] = set()
+            offset = 0
+            for idx, m in enumerate(ms):
+                sfc = m.surface()
+                start = result.find(sfc, offset)
+                if start < 0:
+                    break
+                offset = start + len(sfc)
+                if m.is_oov() or in_pair[idx]:
+                    broken_pos.update(range(start, start + len(sfc)))
+            best = None
+            for pos in sorted(broken_pos):
+                ch = result[pos]
+                if not _KANJI_CHAR.match(ch):
+                    continue
+                allowed = set(self._confusable.get(ch, ""))                     | set(self._shape_neighbors(ch))
+                allowed = {c for c in allowed if _KANJI_CHAR.match(c)}
+                if not allowed:
+                    continue
+                probs = mlm.char_probs(result, pos)
+                if not probs:
+                    continue
+                p_obs = probs.get(ch, 0.0)
+                for cand in allowed:
+                    p = probs.get(cand, 0.0)
+                    if p >= 0.20 and p >= 3.0 * p_obs:
+                        if best is None or p > best[0]:
+                            best = (p, pos, ch, cand)
+            if best is None:
+                break
+            _p, pos, old, new = best
+            result = result[:pos] + new + result[pos + 1:]
+            fixes.append((old, new))
+        if not fixes:
+            return text, []
+        if self._quality(result) > base_q:  # 行品質が悪化 → 全取り消し
+            return text, []
+        return result, fixes
 
     def _snap_to_known_phrase(self, text: str) -> tuple[str, list[tuple[str, str]]]:
         """まだ壊れている行を、既知の正しい文言へあいまい一致で寄せる。
@@ -328,8 +455,20 @@ class TextRepairer:
             s = max(pos, st)
             if s > best_sim:
                 best_sim, best = s, cand
-        if best is None or best_sim < 0.7 or best == text:
+        if best is None or best == text:
             return text, []
+        if best_sim < 0.7:
+            # 損傷が大きい行の救済: 類似度0.55以上で、かつ前後の無傷部分
+            # (共通接頭辞+接尾辞)が4割以上残っている場合のみ許可
+            if best_sim < 0.55 or len(text) != len(best):
+                return text, []
+            pre = next((i for i, (a, b) in enumerate(zip(text, best)) if a != b),
+                       len(best))
+            suf = next((i for i, (a, b) in
+                        enumerate(zip(reversed(text), reversed(best))) if a != b),
+                       len(best))
+            if (pre + suf) / len(best) < 0.4:
+                return text, []
         if any(self._looks_broken(r) for r in _KANJI_RUNS.findall(best)):
             return text, []
         return best, [(text, best)]

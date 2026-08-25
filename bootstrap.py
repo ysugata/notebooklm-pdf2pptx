@@ -53,6 +53,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--with-lama", action="store_true",
                         help="LaMa(IOPaint)修復環境も構築する (複雑背景の高品質テキスト除去)")
+    parser.add_argument("--with-mlm", action="store_true",
+                        help="文脈による文字化け修正モデル(ローカル日本語MLM、約440MB)を導入する")
     parser.add_argument("--with-fonts", action="store_true",
                         help="推奨OFLフォント(Noto Sans JP / Oswald等)をダウンロードする")
     parser.add_argument("--cuda", action="store_true",
@@ -84,6 +86,23 @@ def main() -> None:
                 print("NVIDIA GPUを検出: CUDA版PyTorchでLaMa環境を構築します")
         create_environment(ROOT / ".venv-iopaint", ROOT / "requirements-iopaint.txt",
                            extra_index_url=extra_index)
+
+    if args.with_mlm:
+        # 主環境(.venv)へ追加。LinuxのPyPI版torchはCUDA同梱で巨大なため、
+        # GPUが無ければCPU版インデックスで軽量に入れる(Win/macは標準がCPU/MPS)
+        extra_index = None
+        import platform as _platform
+        if _platform.system() == "Linux" and not (args.cuda or has_nvidia_gpu()):
+            extra_index = "https://download.pytorch.org/whl/cpu"
+        create_environment(ROOT / ".venv", ROOT / "requirements-mlm.txt",
+                           extra_index_url=extra_index)
+        print("文脈修正モデルを事前取得中(約440MB)...")
+        subprocess.run([str(python), "-c", (
+            "from transformers import AutoTokenizer, AutoModelForMaskedLM;"
+            "m='ku-nlp/deberta-v2-base-japanese-char-wwm';"
+            "AutoTokenizer.from_pretrained(m);"
+            "AutoModelForMaskedLM.from_pretrained(m)"
+        )], check=True)
 
     if args.with_fonts:
         subprocess.run([str(python), str(ROOT / "fetch_fonts.py")], check=True)
