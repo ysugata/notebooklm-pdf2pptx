@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>スライド復元の手引き</title>
+</head>
+<body>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&family=Shippori+Mincho:wght@600;700&family=Oswald:wght@500;600&display=swap">
+<style>
+:root{
+  --bg:#f7f6f1; --surface:#ffffff; --surface2:#f0eee7;
+  --ink:#232f3d; --muted:#5f6c7a; --line:#dcd8cd;
+  --shu:#bf3a20; --shu-soft:rgba(191,58,32,.09);
+  --ai:#2f6690; --ai-soft:rgba(47,102,144,.10);
+  --ok:#2e7d4f; --ok-soft:rgba(46,125,79,.10);
+  --card-shadow:0 1px 2px rgba(35,47,61,.06),0 6px 20px rgba(35,47,61,.05);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#141920; --surface:#1d242e; --surface2:#232b36;
+    --ink:#e9e5da; --muted:#9aa5b0; --line:#333d49;
+    --shu:#e0674c; --shu-soft:rgba(224,103,76,.14);
+    --ai:#74a8cf; --ai-soft:rgba(116,168,207,.14);
+    --ok:#63b98a; --ok-soft:rgba(99,185,138,.14);
+    --card-shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.3);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#141920; --surface:#1d242e; --surface2:#232b36;
+  --ink:#e9e5da; --muted:#9aa5b0; --line:#333d49;
+  --shu:#e0674c; --shu-soft:rgba(224,103,76,.14);
+  --ai:#74a8cf; --ai-soft:rgba(116,168,207,.14);
+  --ok:#63b98a; --ok-soft:rgba(99,185,138,.14);
+  --card-shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.3);
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font-family:"BIZ UDPGothic","Hiragino Sans",sans-serif;
+  line-height:1.95; font-size:16px;
+  -webkit-font-smoothing:antialiased;
+}
+main{max-width:880px;margin:0 auto;padding:0 22px 96px}
+h1,h2{font-family:"Shippori Mincho","Hiragino Mincho ProN",serif;line-height:1.4;text-wrap:balance}
+h1{font-size:2.5rem;font-weight:700;margin:.4em 0 .2em}
+h2{font-size:1.45rem;font-weight:700;margin:0 0 .8em;padding-top:.2em}
+h3{font-size:1.02rem;margin:1.2em 0 .4em}
+p{margin:.5em 0}
+.eyebrow{
+  font-family:Oswald,sans-serif;font-weight:500;font-size:.78rem;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--shu);
+}
+.sec-no{
+  font-family:Oswald,sans-serif;font-weight:600;font-size:.8rem;
+  color:var(--muted);letter-spacing:.1em;
+}
+header.hero{padding:72px 0 26px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.hero .lede{font-size:1.06rem;max-width:40em;color:var(--muted)}
+.hero .lede b{color:var(--ink)}
+section{margin-top:72px}
+.card{
+  background:var(--surface);border:1px solid var(--line);border-radius:10px;
+  padding:20px 24px;box-shadow:var(--card-shadow);
+}
+.grid{display:grid;gap:14px}
+@media(min-width:700px){.grid.cols3{grid-template-columns:1fr 1fr 1fr}.grid.cols2{grid-template-columns:1fr 1fr}}
+.kw{
+  display:inline-block;background:var(--surface2);border:1px solid var(--line);
+  border-radius:6px;padding:0 .45em;font-weight:700;white-space:nowrap;
+}
+.say{
+  font-weight:700;color:var(--shu);
+}
+code,.mono{font-family:"SFMono-Regular",Menlo,Consolas,monospace;font-size:.86em}
+pre{
+  background:var(--surface2);border:1px solid var(--line);border-radius:8px;
+  padding:12px 16px;overflow-x:auto;line-height:1.7;margin:.8em 0;
+}
+table{border-collapse:collapse;width:100%;margin:.8em 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+th{background:var(--surface2);font-size:.88rem}
+td b.ans{color:var(--shu)}
+.note{
+  border-left:3px solid var(--ai);background:var(--ai-soft);
+  border-radius:0 8px 8px 0;padding:10px 16px;margin:1em 0;font-size:.95rem;
+}
+.warn{border-left-color:var(--shu);background:var(--shu-soft)}
+.good{border-left-color:var(--ok);background:var(--ok-soft)}
+figure{margin:1.4em 0}
+figcaption{font-size:.86rem;color:var(--muted);margin-top:.5em;text-align:center}
+svg{max-width:100%;height:auto;display:block;margin:0 auto}
+.scrollx{overflow-x:auto;padding-bottom:6px}
+
+/* ---- 出現アニメーション ---- */
+.reveal{opacity:0;transform:translateY(16px);transition:opacity .7s ease,transform .7s ease}
+.reveal.on{opacity:1;transform:none}
+@media (prefers-reduced-motion: reduce){
+  .reveal{opacity:1;transform:none;transition:none}
+  *{animation:none !important}
+}
+
+/* ---- Before/After ---- */
+.ba{display:grid;gap:18px;align-items:stretch}
+@media(min-width:660px){.ba{grid-template-columns:1fr auto 1fr}}
+.slidecard{
+  background:var(--surface);border:1px solid var(--line);border-radius:10px;
+  box-shadow:var(--card-shadow);padding:16px 18px;position:relative;overflow:hidden;
+}
+.slidecard .tag{
+  position:absolute;top:10px;right:10px;font-size:.72rem;border-radius:99px;
+  padding:2px 10px;font-weight:700;
+}
+.tag.locked{background:var(--surface2);color:var(--muted);border:1px solid var(--line)}
+.tag.free{background:var(--ok-soft);color:var(--ok)}
+.slidecard h4{margin:.1em 0 .3em;font-size:1.05rem}
+.slidecard .body-l{filter:blur(.6px);opacity:.85;user-select:none}
+.slidecard .bar{height:8px;border-radius:4px;background:var(--surface2);margin:8px 0;width:70%}
+.slidecard .bar.b2{width:52%}
+.editable-line{position:relative;display:inline-block}
+.editable-line .hl{
+  position:absolute;inset:0;background:var(--ai-soft);border-radius:3px;
+  transform:scaleX(0);transform-origin:left;animation:selectSweep 4.5s ease-in-out infinite;
+}
+@keyframes selectSweep{
+  0%,15%{transform:scaleX(0)} 40%,70%{transform:scaleX(1)} 95%,100%{transform:scaleX(0)}
+}
+.caret{
+  display:inline-block;width:2px;height:1.05em;background:var(--ai);
+  vertical-align:-0.18em;margin-left:1px;animation:blink 1.1s steps(1) infinite;
+}
+@keyframes blink{50%{opacity:0}}
+.ba-arrow{align-self:center;text-align:center;color:var(--shu);font-weight:700}
+
+/* ---- 文字化けフリップ ---- */
+.flip{display:inline-block;position:relative;font-weight:700;perspective:300px}
+.flip .a,.flip .b{display:inline-block;backface-visibility:hidden}
+.flip .a{color:var(--shu);animation:flipA 5s ease-in-out infinite}
+.flip .b{position:absolute;left:0;top:0;color:var(--ok);transform:rotateX(180deg);animation:flipB 5s ease-in-out infinite}
+@keyframes flipA{0%,42%{transform:rotateX(0)}50%,92%{transform:rotateX(-180deg)}100%{transform:rotateX(-360deg)}}
+@keyframes flipB{0%,42%{transform:rotateX(180deg)}50%,92%{transform:rotateX(0)}100%{transform:rotateX(-180deg)}}
+
+/* ---- 自動処理フロー ---- */
+.flow{min-width:760px;display:flex;align-items:flex-start;gap:0;position:relative;padding:26px 0 10px}
+.fstep{flex:1;text-align:center;position:relative;padding:0 4px}
+.fstep .dot{
+  width:15px;height:15px;border-radius:50%;background:var(--surface);
+  border:3px solid var(--ai);margin:0 auto 8px;position:relative;z-index:2;
+}
+.fstep.you .dot{border-color:var(--shu)}
+.fstep .lbl{font-size:.86rem;font-weight:700;line-height:1.5}
+.fstep .sub{font-size:.74rem;color:var(--muted);line-height:1.5}
+.fstep:not(:last-child)::after{
+  content:"";position:absolute;top:6px;left:calc(50% + 12px);right:calc(-50% + 12px);
+  height:3px;background:var(--line);border-radius:2px;z-index:1;
+}
+.fstep .pulse{animation:stepPulse 8s ease-in-out infinite}
+@keyframes stepPulse{
+  0%,100%{box-shadow:0 0 0 0 transparent}
+  4%{box-shadow:0 0 0 7px var(--ai-soft)}
+  10%{box-shadow:0 0 0 0 transparent}
+}
+.flow-lane{font-size:.74rem;font-family:Oswald,sans-serif;letter-spacing:.12em;color:var(--muted);text-transform:uppercase;margin-bottom:2px}
+.lane-you{color:var(--shu)}.lane-auto{color:var(--ai)}
+
+/* ---- 3コマンドカード ---- */
+.cmd{position:relative;padding-top:16px}
+.cmd .no{
+  font-family:Oswald,sans-serif;font-weight:600;font-size:1.6rem;color:var(--shu);
+  line-height:1;margin-bottom:6px;
+}
+.cmd h3{margin:.1em 0 .3em}
+.cmd p{font-size:.93rem;color:var(--muted);margin:.3em 0}
+.cmd .ex{font-size:.9rem;color:var(--ink);background:var(--surface2);border-radius:6px;padding:6px 10px;margin-top:10px}
+
+/* ---- ステータス行 ---- */
+.stats{display:flex;flex-wrap:wrap;gap:12px;margin:20px 0 0}
+.stat{
+  background:var(--surface);border:1px solid var(--line);border-radius:10px;
+  padding:12px 18px;min-width:150px;flex:1;box-shadow:var(--card-shadow);
+}
+.stat .v{font-family:Oswald,sans-serif;font-weight:600;font-size:1.55rem;font-variant-numeric:tabular-nums}
+.stat .k{font-size:.8rem;color:var(--muted);line-height:1.5}
+a{color:var(--ai)}
+:focus-visible{outline:2px solid var(--ai);outline-offset:2px;border-radius:3px}
+footer{margin-top:90px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:.85rem}
+</style>
+
+<main>
+<header class="hero">
+  <div class="eyebrow">Slide Restoration Guide</div>
+  <h1>スライド復元の手引き</h1>
+  <p class="lede">NotebookLMなどが作る「文字が画像になったスライド」を、<b>デザインそのままに、文字を編集できるPowerPoint</b>へ復元するツールの使い方です。エンジニアでなくても、やることは<b>「頼む」と「答える」の2つだけ</b>。</p>
+  <div class="stats">
+    <div class="stat"><div class="v">3形式</div><div class="k">PDF・画像・ほぼ画像のPPTX、どれでも入力OK</div></div>
+    <div class="stat"><div class="v">±0.5px</div><div class="k">実物のPowerPointで実測した文字位置の精度</div></div>
+    <div class="stat"><div class="v">65ページ</div><div class="k">実案件での一括変換実績(再変換は約3分)</div></div>
+  </div>
+</header>
+
+<section class="reveal" id="what">
+  <div class="sec-no">01</div>
+  <h2>これは何をするもの?</h2>
+  <p>AIが生成したスライドは、見た目は綺麗でも中身は<b>1枚の絵</b>。文字を直したくても触れません。このツールは、絵の中の文字を読み取り・消去し、<b>本物のテキストとして同じ位置に組み直します</b>。</p>
+  <div class="ba">
+    <div class="slidecard">
+      <span class="tag locked">画像 — 触れない</span>
+      <h4>変換前</h4>
+      <div class="body-l">
+        <p style="margin:.2em 0">事業戦略の全体像</p>
+        <div class="bar"></div><div class="bar b2"></div>
+        <p style="margin:.2em 0;font-size:.9rem">クリックしても何も選べない</p>
+      </div>
+    </div>
+    <div class="ba-arrow">→<br><span style="font-size:.75rem">変換</span></div>
+    <div class="slidecard">
+      <span class="tag free">テキスト — 編集できる</span>
+      <h4>変換後</h4>
+      <p style="margin:.2em 0"><span class="editable-line"><span class="hl"></span>事業戦略の全体像</span><span class="caret"></span></p>
+      <div class="bar"></div><div class="bar b2"></div>
+      <p style="margin:.2em 0;font-size:.9rem">文字を選んで打ち替えられる</p>
+    </div>
+  </div>
+  <p>フォントの種類・太さ・大きさ・字間・色・グラデーション・光彩まで画像から実測して再現するので、<b>見た目はほぼそのまま</b>です。背景の絵や写真は、文字だけをAI修復で消してきれいに残します。</p>
+</section>
+
+<section class="reveal" id="how">
+  <div class="sec-no">02</div>
+  <h2>使い方 — 3つの頼み方</h2>
+  <p>AIアシスタント(Claude/Codex)に、ファイルを渡してこう頼むだけです。中身はすべて自動のプログラムが実行するので、<b>誰が頼んでも同じ結果</b>になります。</p>
+  <div class="grid cols3">
+    <div class="card cmd">
+      <div class="no">1</div>
+      <h3>変換する</h3>
+      <p>画像のスライドを、編集できるPowerPointに。</p>
+      <div class="ex"><span class="say">「このPDFを編集できるパワポにして」</span><br><span class="mono" style="color:var(--muted)">/pptx-convert</span></div>
+    </div>
+    <div class="card cmd">
+      <div class="no">2</div>
+      <h3>文字化けを直す</h3>
+      <p>AI生成特有の崩れ字(<span class="flip"><span class="a">戦畧</span><span class="b">戦略</span></span> など)を、元画像と照合して自動修正。判断できない分だけレポートで質問されます。</p>
+      <div class="ex"><span class="say">「文字化けを直して」</span><br><span class="mono" style="color:var(--muted)">/pptx-fix-garble</span></div>
+    </div>
+    <div class="card cmd">
+      <div class="no">3</div>
+      <h3>修正指示を反映する</h3>
+      <p>吹き出しの赤入れ(修正指示)が付いて戻ってきたPPTXを、指示どおり本文へ反映。</p>
+      <div class="ex"><span class="say">「修正指示を反映して」</span><br><span class="mono" style="color:var(--muted)">/pptx-apply-feedback</span></div>
+    </div>
+  </div>
+  <div class="note">機械的に確定できない箇所は、勝手に創作せず<b>全件・画像つきでレポートに載せて</b>人に質問する方針です。「余すことなく報告、勝手に判断しない」が設計ルールです。</div>
+</section>
+
+<section class="reveal" id="answer">
+  <div class="sec-no">03</div>
+  <h2>あなたの仕事は「答える」だけ</h2>
+  <p>ツールが判断に迷った箇所は、切り抜き画像つきの<b>回答レポート</b>(HTML)になります。ブラウザで開き、記入欄に答えて<b>「回答をファイルに保存」</b>を押してください。そこから先は全部自動です。</p>
+  <figure>
+    <div class="scrollx"><div class="flow" role="img" aria-label="回答の流れ: 人がレポートに記入して保存すると、以降は検知・照合・適用・レポート更新・整理・通知まで自動で進む">
+      <div class="fstep you"><div class="flow-lane lane-you">あなた</div><div class="dot pulse" style="animation-delay:0s"></div><div class="lbl">記入して保存</div><div class="sub">「回答をファイルに保存」</div></div>
+      <div class="fstep"><div class="flow-lane lane-auto">自動</div><div class="dot pulse" style="animation-delay:1s"></div><div class="lbl">検知</div><div class="sub">保存を数秒〜1分で発見</div></div>
+      <div class="fstep"><div class="flow-lane lane-auto">自動</div><div class="dot pulse" style="animation-delay:2s"></div><div class="lbl">照合</div><div class="sub">どの資料の回答か検証</div></div>
+      <div class="fstep"><div class="flow-lane lane-auto">自動</div><div class="dot pulse" style="animation-delay:3s"></div><div class="lbl">適用</div><div class="sub">本文を修正・学習</div></div>
+      <div class="fstep"><div class="flow-lane lane-auto">自動</div><div class="dot pulse" style="animation-delay:4s"></div><div class="lbl">レポート更新</div><div class="sub">必要なら再変換も</div></div>
+      <div class="fstep"><div class="flow-lane lane-auto">自動</div><div class="dot pulse" style="animation-delay:5s"></div><div class="lbl">整理</div><div class="sub">回答ファイルを片付け</div></div>
+      <div class="fstep"><div class="flow-lane lane-auto">自動</div><div class="dot pulse" style="animation-delay:6s"></div><div class="lbl">通知</div><div class="sub">結果をお知らせ</div></div>
+    </div></div>
+    <figcaption>保存ボタンを押したら、あとはOSの通知を待つだけ。ファイルは自動で片付くので溜まりません。</figcaption>
+  </figure>
+  <h3>回答の書き方(これだけ覚えれば十分)</h3>
+  <table>
+    <tr><th style="width:11em">記入欄に書くこと</th><th>いつ使う?</th><th>何が起きる?</th></tr>
+    <tr><td><b class="ans">正しい文言</b>(打ち直す)</td><td>画像を見て正しい字が分かるとき</td><td>本文がその文言に置き換わり、ツールが<b>学習</b>して次の資料から自動で直る</td></tr>
+    <tr><td><b class="ans">そのまま</b></td><td>今の文字で合っているとき</td><td>「正しい」と記録され、同じ質問は二度と出ない</td></tr>
+    <tr><td><b class="ans">消す</b></td><td>不要なゴミ・断片のとき</td><td>文字を削除。文字でない場所なら背景から消去して自然に埋める</td></tr>
+    <tr><td><b class="ans">元に戻す</b></td><td>アイコンや絵が壊れているとき</td><td>元画像のその部分をそのまま復元する</td></tr>
+    <tr><td><b class="ans">保留</b>(または空欄)</td><td>分からないとき</td><td>そのまま残り、いつでも後から答えられる</td></tr>
+  </table>
+  <div class="note good">最新のレポートは常に <span class="kw mono">work/feedback/report.html</span> の1か所に更新されます。ここをブックマークしておけば迷いません。</div>
+</section>
+
+<section class="reveal" id="mech">
+  <div class="sec-no">04</div>
+  <h2>しくみ — なぜ精度が出るのか</h2>
+  <figure>
+    <div class="scrollx">
+    <svg viewBox="0 0 860 150" role="img" aria-label="変換パイプライン: 元画像から文字を読み、実測し、フォントを照合し、文字を消して背景を修復し、本物のテキストとして組み直す" style="min-width:760px">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0L10 5L0 10z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <g fill="none" stroke="currentColor" stroke-width="1.4" color="var(--ink)">
+        <rect x="8"   y="38" width="130" height="56" rx="9"/>
+        <rect x="188" y="38" width="130" height="56" rx="9"/>
+        <rect x="368" y="38" width="130" height="56" rx="9"/>
+        <rect x="548" y="38" width="130" height="56" rx="9"/>
+        <rect x="722" y="38" width="130" height="56" rx="9" stroke="var(--ok)" stroke-width="2"/>
+        <line x1="140" y1="66" x2="184" y2="66" marker-end="url(#ar)"/>
+        <line x1="320" y1="66" x2="364" y2="66" marker-end="url(#ar)"/>
+        <line x1="500" y1="66" x2="544" y2="66" marker-end="url(#ar)"/>
+        <line x1="680" y1="66" x2="718" y2="66" marker-end="url(#ar)"/>
+      </g>
+      <g font-family="'BIZ UDPGothic',sans-serif" font-size="14" fill="currentColor" text-anchor="middle" color="var(--ink)">
+        <text x="73"  y="61">文字を読む</text><text x="73"  y="80" font-size="11" fill="var(--muted)">OCR(日本語特化)</text>
+        <text x="253" y="61">実測する</text><text x="253" y="80" font-size="11" fill="var(--muted)">大きさ・太さ・色・字間</text>
+        <text x="433" y="61">描き比べる</text><text x="433" y="80" font-size="11" fill="var(--muted)">全フォントで照合</text>
+        <text x="613" y="61">消して埋める</text><text x="613" y="80" font-size="11" fill="var(--muted)">AIで背景を修復</text>
+        <text x="787" y="61" fill="var(--ok)">組み直す</text><text x="787" y="80" font-size="11" fill="var(--muted)">本物のテキストに</text>
+      </g>
+      <g font-family="'BIZ UDPGothic',sans-serif" font-size="11" fill="var(--muted)" text-anchor="middle">
+        <text x="162" y="56">読む</text><text x="342" y="56">測る</text><text x="522" y="56">選ぶ</text><text x="700" y="56">戻す</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption>肝は「描き比べ」。認識した文字を候補フォント全部で実際に描画し、元画像と重ねて一致度で決めるので、勘に頼りません。</figcaption>
+  </figure>
+  <p>文字の縦位置も、<b>実物のPowerPoint(デスクトップ版・ブラウザ版の両方)の描画をPDFで実測</b>して法則を特定し、その法則どおりに配置しています。だから開いたときにズレません。</p>
+
+  <h3>あなたの回答は「資産」になる</h3>
+  <figure>
+    <svg viewBox="0 0 620 190" role="img" aria-label="回答は2つの知識として保存される: この資料専用の修正台帳と、全資料共通の学習ルール。どちらも再変換のたびに自動で適用し直される" style="max-width:620px">
+      <defs>
+        <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0L10 5L0 10z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <g fill="none" stroke="currentColor" stroke-width="1.4" color="var(--ink)">
+        <rect x="10" y="70" width="120" height="50" rx="9" stroke="var(--shu)" stroke-width="2"/>
+        <rect x="230" y="16" width="176" height="52" rx="9"/>
+        <rect x="230" y="122" width="176" height="52" rx="9"/>
+        <rect x="486" y="70" width="124" height="50" rx="9" stroke="var(--ok)" stroke-width="2"/>
+        <line x1="132" y1="84" x2="226" y2="46" marker-end="url(#ar2)"/>
+        <line x1="132" y1="106" x2="226" y2="144" marker-end="url(#ar2)"/>
+        <line x1="408" y1="42" x2="482" y2="82" marker-end="url(#ar2)"/>
+        <line x1="408" y1="148" x2="482" y2="108" marker-end="url(#ar2)"/>
+      </g>
+      <g font-family="'BIZ UDPGothic',sans-serif" font-size="13.5" fill="currentColor" text-anchor="middle" color="var(--ink)">
+        <text x="70" y="91" fill="var(--shu)">あなたの回答</text>
+        <text x="70" y="109" font-size="11" fill="var(--muted)">レポートで記入</text>
+        <text x="318" y="38">修正台帳</text>
+        <text x="318" y="56" font-size="11" fill="var(--muted)">この資料の決定を永久記録</text>
+        <text x="318" y="144">学習ルール</text>
+        <text x="318" y="162" font-size="11" fill="var(--muted)">全資料に効く一般知識</text>
+        <text x="548" y="91" fill="var(--ok)">次の変換</text>
+        <text x="548" y="109" font-size="11" fill="var(--muted)">自動で反映</text>
+      </g>
+    </svg>
+    <figcaption>一度直した文字は、作り直しても消えません。似た間違いは次の資料から自動で直ります(現在: 見間違い文字100組・言い回し68件を学習済み)。</figcaption>
+  </figure>
+</section>
+
+<section class="reveal" id="where">
+  <div class="sec-no">05</div>
+  <h2>どのパソコンで動く?</h2>
+  <p>処理を担当するのは<b>ツール一式が入ったPC(処理役)</b>です。回答レポート自体はただのHTMLなので、<b>どのPC・スマホのブラウザで開いても構いません</b>。</p>
+  <figure>
+    <div class="scrollx">
+    <svg viewBox="0 0 760 210" role="img" aria-label="どのPCで開いてもよいレポートから保存された回答ファイルが、同じPCならダウンロードフォルダ経由で、別のPCなら共有フォルダ経由で処理役PCに届き、ウォッチャーが自動処理して通知を返す" style="min-width:680px">
+      <defs>
+        <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0L10 5L0 10z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <g fill="none" stroke="currentColor" stroke-width="1.4" color="var(--ink)">
+        <rect x="10" y="30" width="180" height="64" rx="9"/>
+        <rect x="10" y="130" width="180" height="64" rx="9"/>
+        <rect x="292" y="80" width="160" height="64" rx="9" stroke-dasharray="5 4"/>
+        <rect x="556" y="72" width="194" height="80" rx="9" stroke="var(--ai)" stroke-width="2"/>
+        <line x1="192" y1="62" x2="288" y2="100" marker-end="url(#ar3)"/>
+        <line x1="192" y1="162" x2="288" y2="124" marker-end="url(#ar3)"/>
+        <line x1="454" y1="112" x2="552" y2="112" marker-end="url(#ar3)"/>
+        <path d="M556 152 C 480 195, 300 195, 205 178" stroke="var(--ok)" marker-end="url(#ar3)" fill="none"/>
+      </g>
+      <g font-family="'BIZ UDPGothic',sans-serif" font-size="13" fill="currentColor" text-anchor="middle" color="var(--ink)">
+        <text x="100" y="55">処理役と同じPC</text>
+        <text x="100" y="74" font-size="11" fill="var(--muted)">レポートで保存するだけ</text>
+        <text x="100" y="155">別のPC(Windows等)</text>
+        <text x="100" y="174" font-size="11" fill="var(--muted)">保存先を共有フォルダに</text>
+        <text x="372" y="105">届け先フォルダ</text>
+        <text x="372" y="124" font-size="11" fill="var(--muted)">Downloads / 共有フォルダ</text>
+        <text x="653" y="98" fill="var(--ai)">処理役PC</text>
+        <text x="653" y="117" font-size="11" fill="var(--muted)">ウォッチャーが常時監視</text>
+        <text x="653" y="136" font-size="11" fill="var(--muted)">適用→再変換→片付け</text>
+        <text x="380" y="200" font-size="11" fill="var(--ok)">完了通知が返ってくる</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption>回答ファイルが処理役PCの監視フォルダに届いた瞬間に、自動処理が始まります。</figcaption>
+  </figure>
+  <h3>ウォッチャー(自動処理の見張り役)の登録 — 最初に1回だけ</h3>
+  <p>処理役PCで次のコマンドを一度実行すれば常駐します(Mac=即時反応 / Windows・Linux=最大1分間隔)。</p>
+  <pre class="mono">.venv/bin/python tools/install_watcher.py
+.venv/bin/python tools/install_watcher.py --dir 共有フォルダのパス   # 別PC運用のとき
+.venv/bin/python tools/install_watcher.py --remove                  # やめるとき</pre>
+  <div class="note">ダウンロードフォルダの場所はOSの設定から自動で見つけます(WindowsでOneDriveに移動している場合なども対応)。ブラウザで保存先を変えている場合だけ <span class="mono">--dir</span> で教えてください。</div>
+</section>
+
+<section class="reveal" id="care">
+  <div class="sec-no">06</div>
+  <h2>気をつけること</h2>
+  <div class="grid cols2">
+    <div class="card">
+      <h3>フォントを入れると完璧</h3>
+      <p style="font-size:.94rem">開くPCに <b>Noto Sans JP / Oswald / BIZ UDゴシック</b> が入っていると、見た目が完全一致します。無くても<b>位置は崩れません</b>が、字の形が代役フォントに変わります。導入は <span class="mono kw">fetch_fonts.py --install</span> を一度実行。</p>
+    </div>
+    <div class="card">
+      <h3>Googleスライドは苦手</h3>
+      <p style="font-size:.94rem">Googleスライドで開くと、Google側の仕様で<b>行間が2割広がります</b>(実測で確認済み)。PowerPoint・Keynote・LibreOfficeでの利用を推奨します。</p>
+    </div>
+    <div class="card">
+      <h3>装飾文字は無理をしない</h3>
+      <p style="font-size:.94rem">アーチ状に曲がった飾り文字などは、壊れたテキストにするより<b>画像のまま残す</b>安全設計です(レポートに「画像のまま」と明記されます)。</p>
+    </div>
+    <div class="card">
+      <h3>勝手に創作しない</h3>
+      <p style="font-size:.94rem">元画像がぼやけて読めない文字は、AIの想像で埋めず<b>「要判断」としてレポートで質問</b>します。答えられるのは原本を知るあなただけ、という前提です。</p>
+    </div>
+  </div>
+</section>
+
+<section class="reveal" id="trouble">
+  <div class="sec-no">07</div>
+  <h2>困ったときは</h2>
+  <table>
+    <tr><th style="width:19em">症状</th><th>対処</th></tr>
+    <tr><td>保存ボタンを押したのに反応がない</td><td>画面のボタン脇に「保存しました」と出ていれば成功です。処理はOS通知で届きます(最大1分)。未記入で押すと「何もしていません」と表示されます</td></tr>
+    <tr><td>通知が来ない</td><td>回答ファイルが処理役PCの監視フォルダに届いているか確認。別PCで保存した場合は共有フォルダ経由が必要です</td></tr>
+    <tr><td>古いレポート画面から保存してしまった</td><td>問題ありません。回答には資料の照合番号が埋め込まれており、自動で正しく引き継がれます</td></tr>
+    <tr><td>同じ回答を2回保存してしまった</td><td>問題ありません。適用済みの回答は「新たにやることなし」と判定されるだけです</td></tr>
+    <tr><td>とにかく今すぐ処理してほしい</td><td>処理役PCで <span class="mono kw">tools/answers_autoingest.py</span> を実行すると、その場で取り込みます</td></tr>
+  </table>
+  <div class="note warn">修正指示(赤入れ)の反映や変換そのものは、AIアシスタントに頼むのが確実です。迷ったら<span class="say">「状況を教えて」</span>と聞けば、いま何がどこまで進んでいるかを答えます。</div>
+</section>
+
+<footer>
+  <p>notebooklm-pdf2pptx — 2026年8月版の機能に基づく手引き。仕様はすべて実測・検証済みの動作を記載しています。</p>
+</footer>
+</main>
+
+<script>
+(function(){
+  try{
+    var io = new IntersectionObserver(function(es){
+      es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add("on"); io.unobserve(e.target);} });
+    }, {threshold:.12});
+    document.querySelectorAll(".reveal").forEach(function(el){ io.observe(el); });
+  }catch(e){
+    document.querySelectorAll(".reveal").forEach(function(el){ el.classList.add("on"); });
+  }
+})();
+</script>
+
+</body>
+</html>
