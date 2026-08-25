@@ -110,8 +110,14 @@ summary{cursor:pointer;font-weight:bold}\n.q label{display:block;margin:3px 0;cu
         tid = t["id"]
         cur = " / ".join(t["target"]["paragraphs"]) if t.get("target") else "(図形未特定)"
         s_val = sugg.get(tid)
-        if not s_val and t.get("suggested"):
+        if s_val is None and t.get("suggested"):
             s_val = " / ".join(t["suggested"])
+        # エージェント提案の正規化: 空文字=消す、現本文と同一=そのまま
+        if s_val is not None:
+            if not s_val.strip():
+                s_val = "消す"
+            elif s_val == cur:
+                s_val = "そのまま"
         ai_row = ""
         if s_val and s_val != cur:
             ai_row = (f'<label><input type="radio" name="c_{e(tid)}" value="ai" '
