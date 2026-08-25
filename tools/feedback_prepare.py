@@ -226,9 +226,23 @@ def main() -> int:
             tasks.append(entry)
             slides_with_tasks.add(idx)
 
-    # クロップ生成
+    # クロップ生成: レンダラ不要の経路を優先する。
+    # workディレクトリがあれば、変換時の自己検証画像(qa_render.png)/
+    # 原本画像(source.png)を使う(LibreOffice不要 = Windowsでも追加依存なし)。
+    # 無いスライドだけLibreOfficeでのレンダリングにフォールバックする。
     if slides_with_tasks:
-        pages = render_slides(args.pptx, out / "renders")
+        pages: dict[int, Path] = {}
+        if args.work_dir is not None:
+            for n in sorted(slides_with_tasks):
+                page_dir = args.work_dir / "pages" / f"{n:03d}"
+                for name in ("qa_render.png", "source.png"):
+                    p = page_dir / name
+                    if p.is_file():
+                        pages[n] = p
+                        break
+        missing = slides_with_tasks - set(pages)
+        if missing:
+            pages.update(render_slides(args.pptx, out / "renders"))
         sw = prs.slide_width
         sh = prs.slide_height
         if pages:
