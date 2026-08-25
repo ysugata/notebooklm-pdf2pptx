@@ -30,6 +30,10 @@ def downloads_dir() -> Path:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--remove", action="store_true")
+    ap.add_argument("--dir", action="append", default=[], metavar="PATH",
+                    help="追加の監視フォルダ(繰り返し可)。ブラウザの保存先を"
+                         "変えている場合や、別PCからの共有フォルダ"
+                         "(Dropbox/OneDrive等)を指定する")
     args = ap.parse_args()
 
     if sys.platform != "darwin":
@@ -53,9 +57,21 @@ def main() -> int:
 
     py = ROOT / ".venv" / "bin" / "python"
     log = ROOT / "runs" / "autoingest.log"
-    watch = [str(downloads_dir()), str(ROOT / "inbox")]
+    import os
+    extra = [str(Path(d).expanduser().resolve()) for d in args.dir]
+    extra += [p for p in os.environ.get("NBLM_ANSWERS_DIRS", "").split(os.pathsep)
+              if p.strip()]
+    extra = list(dict.fromkeys(extra))
+    watch = [str(downloads_dir()), str(ROOT / "inbox")] + extra
     (ROOT / "inbox").mkdir(exist_ok=True)
     watch_xml = "\n".join(f"    <string>{w}</string>" for w in watch)
+    # 追加フォルダは常駐側(autoingest)の探索対象にも入れる
+    # (launchdにはユーザーシェルの環境変数が届かないためplistへ焼き込む)
+    env_xml = ""
+    if extra:
+        env_xml = ("  <key>EnvironmentVariables</key>\n  <dict>\n"
+                   "    <key>NBLM_ANSWERS_DIRS</key>"
+                   f"<string>{os.pathsep.join(extra)}</string>\n  </dict>\n")
     plist = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -71,7 +87,7 @@ def main() -> int:
   <array>
 {watch_xml}
   </array>
-  <key>ThrottleInterval</key><integer>15</integer>
+{env_xml}  <key>ThrottleInterval</key><integer>15</integer>
   <key>StandardOutPath</key><string>{log}</string>
   <key>StandardErrorPath</key><string>{log}</string>
 </dict>
