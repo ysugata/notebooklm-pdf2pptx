@@ -119,9 +119,15 @@ summary{cursor:pointer;font-weight:bold}\n.q label{display:block;margin:3px 0;cu
             elif s_val == cur:
                 s_val = "そのまま"
         ai_row = ""
+        ai_checked = ""
+        if s_val == "そのまま":
+            # 本文を一切変えない提案は誤りのコストが「質問が消える」だけなので
+            # 選択済みで表示する(書き換え・削除の提案は保留が既定のまま)
+            ai_checked = " checked"
         if s_val and s_val != cur:
             ai_row = (f'<label><input type="radio" name="c_{e(tid)}" value="ai" '
-                      f'data-text="{e(s_val)}"> 予測を反映: <b>{e(s_val)}</b></label>')
+                      f'data-text="{e(s_val)}"{ai_checked}> 予測を反映: '
+                      f'<b>{e(s_val)}</b></label>')
         parts.append(f'<div class="card task" data-id="{e(tid)}">'
                      f'<span class="id">{e(tid)} — スライド{t["slide"]}</span>'
                      f"<div>種別: {e(t.get('marker_text') or '')}</div>"
@@ -135,7 +141,8 @@ summary{cursor:pointer;font-weight:bold}\n.q label{display:block;margin:3px 0;cu
                      f'<label><input type="radio" name="c_{e(tid)}" value="keep"> 元の画像のまま残す(復元)</label>'
                      f'<label><input type="radio" name="c_{e(tid)}" value="del"> この文字を消す</label>'
                      f'<label><input type="radio" name="c_{e(tid)}" value="ok"> 今の文字で正しい</label>'
-                     f'<label><input type="radio" name="c_{e(tid)}" value="hold" checked> 保留</label>'
+                     f'<label><input type="radio" name="c_{e(tid)}" value="hold"'
+                     f'{"" if ai_checked else " checked"}> 保留</label>'
                      '</div></div>')
     if buckets["needs_human"]:
         tasks_sha = None
