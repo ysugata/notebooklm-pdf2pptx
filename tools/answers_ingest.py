@@ -103,6 +103,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("tasks", type=Path)
     ap.add_argument("answers_txt", type=Path, nargs="?")
+    ap.add_argument("--allow-stale", action="store_true",
+                    help="回答ファイルのハッシュが現在のtasksと違っても、"
+                         "タスクIDベースで取り込む(本文不変性はapply側が検証)")
     ap.add_argument("--apply", action="store_true",
                     help="answers.json生成後に feedback_apply まで実行する")
     ap.add_argument("-o", "--output-pptx", type=Path, default=None,
@@ -115,14 +118,21 @@ def main() -> int:
     tasks = {t["id"]: t for t in meta["tasks"]}
 
     txt_path = args.answers_txt or find_answer_file(tasks_sha)
+    if txt_path is None and args.allow_stale:
+        cands = [p for d in SCAN_DIRS if d.is_dir() for p in d.glob("answers_*.txt")]
+        txt_path = max(cands, key=lambda p: p.stat().st_mtime) if cands else None
     if txt_path is None:
         print("回答ファイルが見つかりません (inbox/ か ~/Downloads の answers_*.txt)")
         return 2
     text = txt_path.read_text("utf-8")
     head = text.splitlines()[0] if text.splitlines() else ""
     if "tasks_sha256" in head and tasks_sha not in head:
-        print(f"適用拒否: {txt_path.name} は別のタスクセットへの回答です")
-        return 1
+        if not args.allow_stale:
+            print(f"適用拒否: {txt_path.name} は別の(古い)タスクセットへの回答です。"
+                  "内容を引き継ぐ場合は --allow-stale を付けてください")
+            return 1
+        print("注意: 古いタスクセットへの回答をIDベースで引き継ぎます"
+              "(本文の不変性はapply側で検証されます)")
 
     answers, problems = parse_answers(text, tasks)
     out_json = args.tasks.parent / "answers.json"
@@ -131,7 +141,8 @@ def main() -> int:
         ensure_ascii=False, indent=1), "utf-8")
     n_fix = sum(1 for a in answers if a["status"] == "fix")
     print(f"取り込み: {txt_path}")
-    print(f"answers.json: fix {n_fix} / skip "
+    print(f"answers.json: fix {n_fix} / restore "
+          f"{sum(1 for a in answers if a['status'] == 'restore')} / skip "
           f"{sum(1 for a in answers if a['status'] == 'skip')} / 保留 "
           f"{sum(1 for a in answers if a['status'] == 'needs_human')}")
     for p in problems:
