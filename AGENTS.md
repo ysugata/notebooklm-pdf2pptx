@@ -1,5 +1,9 @@
 # エージェント手順書 — 修正指示の反映ワークフロー
 
+> 初回セットアップ(クローン直後に一度だけ):
+> `python3 bootstrap.py --with-lama --with-fonts`
+> 以後のコマンドはすべて `.venv/bin/python`(Windowsは `.venv\Scripts\python`)を使う。
+
 このリポジトリで「注記(修正指示)つきPPTX」を処理するときの手順。
 CodexでもClaude Codeでも同じ。**エージェントの自由裁量は answers.json の
 中身だけ**であり、ファイル編集・検証・梱包はすべてスクリプトが決定論的に行う。
