@@ -13,7 +13,7 @@ description: ユーザーが「編集できるパワポにして」「このPDF/
    `python3 bootstrap.py --with-lama --with-fonts`(数分かかる旨を先に伝える)
 2. 変換:
    ```
-   .venv/bin/python convert.py "<入力ファイル>" -o "<入力名>_editable.pptx" --inpaint auto
+   .venv/bin/python convert.py "<入力ファイル>" -o "<入力名>_editable.pptx" --inpaint auto --no-open-report
    ```
    - 大きい資料は時間がかかる(目安: 60ページで1時間)。途中で止まっても
      同じコマンドの再実行で続きから再開される
@@ -25,7 +25,10 @@ description: ユーザーが「編集できるパワポにして」「このPDF/
 4. 報告(専門用語を避ける):
    - 何枚変換され、いくつの文字が編集可能になったか
    - 自動修正された文字化けの件数(reviewの「文字化け予測修正」)
-   - 要確認箇所の件数と、直すなら `/pptx-fix-garble` でできること
+   - 要確認箇所が残っていたら、**そのままチャットで回答を始める**
+     (/pptx-fix-garble の対話式回答が既定。変換は `--no-open-report` で実行し、
+     ブラウザとチャットの二重提示を避ける。ユーザーが「後で」と言ったら
+     レポートの場所を伝えて終える)
    - 出力ファイルの場所
 
 ## 完了条件(全て満たすまで終了しない)

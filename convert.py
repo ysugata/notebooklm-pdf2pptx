@@ -46,6 +46,9 @@ def main() -> None:
                              "フォントを選ぶ(他PCへ渡すと崩れる可能性)")
     parser.add_argument("--ocr-model", choices=["small", "medium"], default="small",
                         help="OCR認識モデル。medium=高精度(日本語+2.3%%)だが低速")
+    parser.add_argument("--no-open-report", action="store_true",
+                        help="変換後の要判断レポートを自動で開かない"
+                             "(チャットで回答を続けるエージェント用)")
     parser.add_argument("--renderer-profile", choices=["powerpoint", "libreoffice"],
                         default="powerpoint",
                         help="出力を開くレンダラ(行レイアウトの実測則を切替)")
@@ -81,7 +84,8 @@ def main() -> None:
                         str(args.output.resolve()), "--work-dir", str(settings.work_dir),
                         "--out-dir", str(fb)], check=True)
         subprocess.run([sys.executable, str(Path(__file__).parent / "tools" / "feedback_report.py"),
-                        str(fb / "tasks.json"), "-o", str(fb / "report.html"), "--open"],
+                        str(fb / "tasks.json"), "-o", str(fb / "report.html")]
+                       + ([] if args.no_open_report else ["--open"]),
                        check=True)
     except Exception as exc:
         print(f"要判断レポートの自動生成に失敗: {exc}")
