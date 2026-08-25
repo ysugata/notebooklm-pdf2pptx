@@ -56,6 +56,17 @@ def register_tasks(out: "Path", digest: str, payload: dict, kind: str) -> None:
             "kind": kind}, ensure_ascii=False) + "\n")
 
 
+_REPAIRER = None
+
+
+def _repairer():
+    global _REPAIRER
+    if _REPAIRER is None:
+        from notebooklm_pdf2pptx.textfix import TextRepairer
+        _REPAIRER = TextRepairer()
+    return _REPAIRER
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("pptx", type=Path, help="編集可能化済みPPTX")
@@ -128,6 +139,10 @@ def main() -> int:
                 seen_shapes.add(hit)
                 entry["target"] = {"shape_id": hit, "name": "",
                                    "paragraphs": shape_paras[hit]}
+                # 確定基準に届かなかった機械推測(レポートで選択採用できる)
+                props = [_repairer().propose(p) or p for p in shape_paras[hit]]
+                if props != shape_paras[hit]:
+                    entry["suggested"] = props
             else:
                 entry["status"] = "needs_human"
                 entry["note"] = "出力PPTX内で該当図形を特定できず"
