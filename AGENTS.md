@@ -5,7 +5,7 @@ CodexはこのAGENTS.mdを自動で読む(スキル機能は不要)。依頼は3
 | 依頼の言葉 | やること |
 |---|---|
 | 「編集できるパワポにして」 | `.venv/bin/python convert.py "<入力>" -o "<入力名>_editable.pptx" --inpaint auto --work-dir "work_<資料名>"`。入力はPDF/画像/ほぼ画像のPPTX。完了後 `tools/smoke_test.py <出力> --pages-dir <work>/pages` で健全性確認 |
-| 「文字化けを直して」 | 変換時に自動修正+自動トリアージ済み。残った要確認分を `tools/garble_prepare.py <出力pptx> --work-dir <work> --out-dir <work>/feedback` でタスク化。**各タスクの crops/<id>_source.png を実際に開いて読み**、(a)画像から確信できる修正は answers に fix、(b)確信は無いが有力な読みは `<out-dir>/suggestions.json` に `{"タスクID": "推測文言"}`(複数段落は「 / 」区切り)で書く — 推測は自動適用されず、人がレポートの「予測を反映」で採否を選ぶ。(c)読めないものは touch しない。最後に `tools/feedback_report.py` でレポート生成 |
+| 「文字化けを直して」 | ①`tools/garble_prepare.py <出力pptx> --work-dir <work> --out-dir <work>/feedback` でタスク化(自動修正・トリアージも適用される)。②**既定: 残った要判断はその場のチャットで1件ずつ選択式に質問する**(画像を `open crops/<id>_source.png` で見せ、1=予測を反映 / 2=そのまま / 3=消す / 4=画像のまま / 5=文言入力)。集めた回答を answers.json にして apply→report。③ユーザーが「後で」と言った場合・対話できない実行(exec等)の場合のみ: 画像を読んで確信分は fix、有力な読みは suggestions.json に書き、`feedback_report.py --open` でレポートに引き継ぐ。詳細は「対話式回答」節 |
 | 「修正指示を反映して」 | 以下の「修正指示の反映ワークフロー」手順1〜5 |
 
 ## リポジトリの地図
