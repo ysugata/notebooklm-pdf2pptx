@@ -154,6 +154,9 @@ def main() -> int:
                          "タスクIDベースで取り込む(本文不変性はapply側が検証)")
     ap.add_argument("--apply", action="store_true",
                     help="answers.json生成後に feedback_apply まで実行する")
+    ap.add_argument("--archive", action="store_true",
+                    help="処理成功後、回答ファイルを inbox/processed/ へ移動する"
+                         "(ダウンロードフォルダにファイルが溜まるのを防ぐ)")
     ap.add_argument("-o", "--output-pptx", type=Path, default=None,
                     help="--apply時の出力先(省略時は入力PPTXを上書き)")
     args = ap.parse_args()
@@ -196,6 +199,17 @@ def main() -> int:
     for p in problems:
         print(f"  注意: {p}")
 
+    def archive() -> None:
+        if not args.archive:
+            return
+        dest_dir = ROOT / "inbox" / "processed"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        import datetime
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest = dest_dir / f"{stamp}_{txt_path.name}"
+        txt_path.rename(dest)
+        print(f"回答ファイルを整理: {dest}")
+
     if args.apply:
         src = Path(meta["source"])
         out = args.output_pptx or src
@@ -204,7 +218,10 @@ def main() -> int:
         if meta.get("work_dir"):
             cmd += ["--work-dir", meta["work_dir"]]
         result = subprocess.run(cmd)
+        if result.returncode == 0:
+            archive()
         return result.returncode
+    archive()
     print("次: tools/feedback_apply.py で適用してください(または --apply を付けて再実行)")
     return 0
 

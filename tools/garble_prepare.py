@@ -44,6 +44,18 @@ FIXABLE_REASON_KEYS = ("未認識のインクが残存",)
 IMAGE_KEPT_KEYS = ("画像のまま保持",)
 
 
+def register_tasks(out: "Path", digest: str, payload: dict, kind: str) -> None:
+    """自動取り込み(answers_autoingest)用にタスクセットを台帳登録する。"""
+    reg = Path(__file__).resolve().parent.parent / "runs" / "tasks_registry.jsonl"
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    import json as _json
+    with open(reg, "a", encoding="utf-8") as f:
+        f.write(_json.dumps({
+            "sha": digest, "tasks": str((out / "tasks.json").resolve()),
+            "source": payload["source"], "work_dir": payload.get("work_dir"),
+            "kind": kind}, ensure_ascii=False) + "\n")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("pptx", type=Path, help="編集可能化済みPPTX")
@@ -143,8 +155,9 @@ def main() -> int:
     }
     body = json.dumps(payload, ensure_ascii=False, indent=1)
     (out / "tasks.json").write_text(body, "utf-8")
-    (out / "tasks.sha256").write_text(
-        hashlib.sha256(body.encode()).hexdigest(), "utf-8")
+    digest = hashlib.sha256(body.encode()).hexdigest()
+    (out / "tasks.sha256").write_text(digest, "utf-8")
+    register_tasks(out, digest, payload, "garble")
     print(f"tasks.json: {len(tasks)}件 -> {out / 'tasks.json'}")
     if image_kept:
         print(f"参考: 画像のまま保持されている行 {len(image_kept)}件"

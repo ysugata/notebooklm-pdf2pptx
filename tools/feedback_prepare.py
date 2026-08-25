@@ -149,6 +149,18 @@ def render_slides(pptx: Path, out_dir: Path) -> dict[int, Path]:
             return {}
 
 
+def register_tasks(out: "Path", digest: str, payload: dict, kind: str) -> None:
+    """自動取り込み(answers_autoingest)用にタスクセットを台帳登録する。"""
+    reg = Path(__file__).resolve().parent.parent / "runs" / "tasks_registry.jsonl"
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    import json as _json
+    with open(reg, "a", encoding="utf-8") as f:
+        f.write(_json.dumps({
+            "sha": digest, "tasks": str((out / "tasks.json").resolve()),
+            "source": payload["source"], "work_dir": payload.get("work_dir"),
+            "kind": kind}, ensure_ascii=False) + "\n")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("pptx", type=Path)
@@ -298,6 +310,7 @@ def main() -> int:
     tasks_path.write_text(body, "utf-8")
     digest = hashlib.sha256(body.encode()).hexdigest()
     (out / "tasks.sha256").write_text(digest, "utf-8")
+    register_tasks(out, digest, payload, "feedback")
     by_class = {}
     for t in tasks:
         by_class[t["class"]] = by_class.get(t["class"], 0) + 1

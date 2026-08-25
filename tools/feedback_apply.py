@@ -258,6 +258,49 @@ def main() -> int:
             continue
         new_paras = a.get("paragraphs")
         target = t.get("target")
+        if (not target and isinstance(new_paras, list)
+                and all(not p for p in new_paras) and t.get("bbox")
+                and args.work_dir is not None):
+            # 図形未特定領域への「消す」: テキストとして編集できないため、
+            # 背景画像の該当領域をインペイントで消去する。台帳へ永続記録し、
+            # 再解析後もリプレイされる。反映には再変換(合成)が必要。
+            import cv2
+            import numpy as np
+            page_dir = args.work_dir / "pages" / f"{t['slide']:03d}"
+            bg_path = page_dir / "background.png"
+            bg_img = cv2.imread(str(bg_path))
+            if bg_img is None:
+                rejected += 1
+                log.append({"id": aid, "result": "rejected",
+                            "reason": "work内のbackground.pngが読めない"})
+                continue
+            x0, y0, x1, y1 = t["bbox"]
+            pad = 4
+            mask = np.zeros(bg_img.shape[:2], np.uint8)
+            mask[max(0, int(y0) - pad):min(bg_img.shape[0], int(y1) + pad),
+                 max(0, int(x0) - pad):min(bg_img.shape[1], int(x1) + pad)] = 255
+            bg_img = cv2.inpaint(bg_img, mask, 5, cv2.INPAINT_TELEA)
+            cv2.imwrite(str(bg_path), bg_img)
+            lay_path = page_dir / "layout.json"
+            if lay_path.is_file():
+                lay = json.loads(lay_path.read_text("utf-8"))
+                for r in lay.get("review", []):
+                    if r.get("bbox") == t["bbox"] and not r.get("resolved"):
+                        r["resolved"] = "erased"
+                lay_path.write_text(
+                    json.dumps(lay, ensure_ascii=False, indent=1), "utf-8")
+            ledger = args.work_dir / "fixes_ledger.jsonl"
+            entry = json.dumps({"slide": t["slide"], "erase_bbox": t["bbox"]},
+                               ensure_ascii=False)
+            existing = (ledger.read_text("utf-8").splitlines()
+                        if ledger.is_file() else [])
+            if entry not in existing:
+                with open(ledger, "a", encoding="utf-8") as f:
+                    f.write(entry + "\n")
+            applied += 1
+            log.append({"id": aid, "result": "erased",
+                        "note": "背景の該当領域を消去(再変換で出力へ反映)"})
+            continue
         if not target or not isinstance(new_paras, list):
             rejected += 1
             log.append({"id": aid, "result": "rejected", "reason": "targetまたはparagraphs欠落"})
@@ -321,6 +364,10 @@ def main() -> int:
             continue
         for old, new in zip(row.get("before", []), row.get("after", [])):
             if old == new or not old.strip():
+                continue
+            if not new.strip():
+                # 削除(消す)は文脈依存の判断であり一般則ではない。
+                # フレーズ学習すると将来の資料で同じ文字列を勝手に消してしまう
                 continue
             if len(old) == len(new):
                 diffs = [(a, b) for a, b in zip(old, new) if a != b]

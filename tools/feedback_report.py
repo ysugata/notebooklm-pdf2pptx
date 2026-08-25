@@ -61,7 +61,7 @@ def main() -> int:
         status = res.get("result") or ans.get("status") or t.get("status") or "open"
         if status in ("needs_human",):
             buckets["needs_human"].append((t, ans, res))
-        elif status in ("applied", "restored"):
+        elif status in ("applied", "restored", "erased"):
             buckets["applied"].append((t, ans, res))
         elif status == "skip":
             buckets["skip"].append((t, ans, res))
@@ -128,7 +128,11 @@ function collect(save){{
   let text = lines.join("\\n");
   const out = document.getElementById("out");
   out.value = text || "(未記入)";
-  if(!text) return;
+  if(!text){{
+    document.getElementById("copied").textContent =
+      "未記入のため何もしていません(空欄の項目は保留のままです)";
+    return;
+  }}
   if(TASKS_SHA) text = "# tasks_sha256: " + TASKS_SHA + "\\n" + text;
   if(save){{
     const blob = new Blob([text], {{type:"text/plain"}});
@@ -136,7 +140,8 @@ function collect(save){{
     a.href = URL.createObjectURL(blob);
     a.download = "answers_" + (TASKS_SHA ? TASKS_SHA.slice(0,8) : "session") + ".txt";
     a.click();
-    document.getElementById("copied").textContent = "ファイルを保存しました";
+    document.getElementById("copied").textContent =
+      "保存しました。自動取り込みが有効なら数十秒で適用され、OS通知が届きます";
   }} else {{
     out.select();
     try{{ navigator.clipboard.writeText(text);

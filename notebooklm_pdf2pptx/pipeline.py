@@ -717,6 +717,30 @@ class Converter:
                 return all(c in (o, n) for c, o, n in zip(cur, old, new))
 
             for e in entries:
+                if "erase_bbox" in e:
+                    # 領域消去のリプレイ: 背景の該当領域を再消去し、
+                    # 重なるreview(再解析でbboxが数px揺れても中心が入れば)を解決
+                    import cv2
+                    bg_path = lay_path.parent / "background.png"
+                    bg = cv2.imread(str(bg_path))
+                    if bg is not None:
+                        x0, y0, x1, y1 = e["erase_bbox"]
+                        pad = 4
+                        mask = np.zeros(bg.shape[:2], np.uint8)
+                        mask[max(0, int(y0) - pad):min(bg.shape[0], int(y1) + pad),
+                             max(0, int(x0) - pad):min(bg.shape[1], int(x1) + pad)] = 255
+                        bg = cv2.inpaint(bg, mask, 5, cv2.INPAINT_TELEA)
+                        cv2.imwrite(str(bg_path), bg)
+                        for r in lay.get("review", []):
+                            rb = r.get("bbox")
+                            if rb and not r.get("resolved"):
+                                cx, cy = (rb[0] + rb[2]) / 2, (rb[1] + rb[3]) / 2
+                                if x0 - pad <= cx <= x1 + pad and \
+                                        y0 - pad <= cy <= y1 + pad:
+                                    r["resolved"] = "erased"
+                                    dirty = True
+                        n_applied += 1
+                    continue
                 before, after = e["before"], e["after"]
                 hit = False
                 replaced: list[str] = []  # 置換前の行本文(review解決用)
