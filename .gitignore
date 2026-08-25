@@ -5,11 +5,13 @@ __pycache__/
 run/
 slides/
 work/
+work_*/
 output*.pptx
 .DS_Store
 text_layout.generated.json
 fonts/
-feedback_work/
+feedback_work*/
+work_*/
 runs/
 inbox/
 outbox/

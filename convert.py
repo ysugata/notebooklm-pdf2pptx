@@ -61,6 +61,13 @@ def main() -> None:
         settings.work_dir = args.work_dir
     settings.work_dir.mkdir(parents=True, exist_ok=True)
 
+    (settings.work_dir / "convert_meta.json").write_text(
+        __import__("json").dumps({
+            "input": str(args.input.resolve()),
+            "output": str(args.output.resolve()),
+            "argv": ["--inpaint", args.inpaint,
+                     "--renderer-profile", args.renderer_profile]},
+            ensure_ascii=False), "utf-8")
     converter = Converter(settings)
     report = converter.convert(args.input.resolve(), args.output.resolve())
 
