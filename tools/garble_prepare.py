@@ -67,6 +67,25 @@ def _repairer():
     return _REPAIRER
 
 
+def _refresh_workdir(work_dir):
+    """タスク抽出前に、最新の自動処理をキャッシュへ適用する(冪等)。
+
+    textfix追適用・画像裁定・自動トリアージは本来convert時に走るが、
+    改良後に一度も再変換していないworkディレクトリでは未実行のまま残る。
+    抽出前にここで必ず走らせ、「人に見せる前に機械ができることは全部やる」
+    を抽出時点でも保証する。
+    """
+    from types import SimpleNamespace
+    from notebooklm_pdf2pptx.pipeline import Converter
+    from notebooklm_pdf2pptx.config import Settings
+    dummy = SimpleNamespace(textfix=_repairer(), settings=Settings(),
+                            _LATIN_CONFUSIONS=Converter._LATIN_CONFUSIONS)
+    pages = work_dir / "pages"
+    Converter._apply_textfix_pass(dummy, pages)
+    Converter._image_arbitrate_reviews(dummy, pages)
+    Converter._auto_triage_reviews(dummy, pages)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("pptx", type=Path, help="編集可能化済みPPTX")
@@ -81,6 +100,9 @@ def main() -> int:
 
     tasks = []
     image_kept = []
+    if args.work_dir:
+        _refresh_workdir(args.work_dir)
+
     for lp in sorted(glob.glob(str(args.work_dir / "pages" / "*" / "layout.json"))):
         lay = json.loads(Path(lp).read_text("utf-8"))
         page = lay["number"]
