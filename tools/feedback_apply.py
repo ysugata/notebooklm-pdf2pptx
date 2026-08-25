@@ -306,6 +306,7 @@ def main() -> int:
                     if p0.runs and not p0.runs[0].text.startswith("✔"):
                         p0.runs[0].text = "✔ " + p0.runs[0].text
 
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(args.output))
     Presentation(str(args.output))  # 再読込検証(壊れたzipなら例外)
 
