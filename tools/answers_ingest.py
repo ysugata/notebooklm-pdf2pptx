@@ -130,7 +130,11 @@ def parse_answers(text: str, tasks: dict) -> tuple[list[dict], list[str]]:
                 continue
             n = len(target["paragraphs"])
             paras = [p.strip() for p in value.split(" / ")] if " / " in value else [value]
-            if len(paras) == n:
+            # 回答が現在の本文と同一 = 「この文言で正しい」の確認 → skip扱い
+            # (同一文字列のfixはreview解決に繋がらず、タスクが再提示され続ける)
+            if paras == target["paragraphs"] or (n == 1 and value == target["paragraphs"][0]):
+                answers.append({"id": tid, "status": "skip"})
+            elif len(paras) == n:
                 answers.append({"id": tid, "status": "fix", "paragraphs": paras})
             elif n == 1:
                 answers.append({"id": tid, "status": "fix", "paragraphs": [value]})
