@@ -29,7 +29,7 @@ from notebooklm_pdf2pptx.pptx_writer import (
 )
 from notebooklm_pdf2pptx.config import Settings
 
-CANVAS_W, CANVAS_H = 1376, 768
+CANVAS_W, CANVAS_H = 1376, 774  # 960x540ptと同アスペクト(必須)
 PT_PER_PX = 960.0 / CANVAS_W
 
 

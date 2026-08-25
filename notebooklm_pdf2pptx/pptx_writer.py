@@ -50,12 +50,16 @@ def _win_metrics_pt(font_path: str, font_index: int, size_pt: float) -> tuple[fl
 
 def first_baseline_offset_pt(font_path: str, font_index: int, size_pt: float,
                              exact_spacing_pt: float | None) -> float:
-    """テキストボックス上端(マージン0)から最初のベースラインまでの距離。"""
-    ascent, descent = _win_metrics_pt(font_path, font_index, size_pt)
+    """テキストボックス上端(マージン0)から最初のベースラインまでの距離。
+
+    行高固定(spcPts)時のLibreOffice実測則(tools/calibrate2.py、16ケースの
+    PDFベースライン座標で±0.03pt一致): baseline = 行高 − 0.2×フォントサイズ。
+    ディセント扱いはフォントメトリクス非依存の固定20%。
+    """
     if exact_spacing_pt is None:
+        ascent, _descent = _win_metrics_pt(font_path, font_index, size_pt)
         return ascent
-    # 行高固定時: ベースラインは行ボックス下端からディセント分だけ上
-    return exact_spacing_pt - descent
+    return exact_spacing_pt - 0.2 * size_pt
 
 
 def natural_line_height_pt(font_path: str, font_index: int, size_pt: float) -> float:
