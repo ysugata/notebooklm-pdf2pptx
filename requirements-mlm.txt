@@ -1,6 +1,0 @@
-# 文脈による文字化け修正(ローカルMLM)用の追加依存。CPUで動作。
-# インストールは bootstrap.py --with-mlm を推奨(Win/LinuxはCPU版torroを明示解決)
-torch
-transformers>=4.44
-sentencepiece
-protobuf
