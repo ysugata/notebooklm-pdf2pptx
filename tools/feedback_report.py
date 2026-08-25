@@ -36,6 +36,8 @@ def main() -> int:
     ap.add_argument("answers", type=Path, nargs="?")
     ap.add_argument("--runs-log", type=Path, default=None)
     ap.add_argument("-o", "--output", type=Path, required=True)
+    ap.add_argument("--open", action="store_true",
+                    help="要判断が残っている場合、生成後にブラウザで開く")
     args = ap.parse_args()
 
     base = args.tasks.parent
@@ -245,6 +247,19 @@ function collect(save){{
     parts.append("</html>")
     args.output.write_text("".join(parts), "utf-8")
 
+    if args.open and c["needs_human"] > 0:
+        import subprocess as _sp
+        import sys as _sys
+        import os as _os
+        try:
+            if _sys.platform == "darwin":
+                _sp.run(["open", str(args.output)])
+            elif _sys.platform == "win32":
+                _os.startfile(str(args.output))  # type: ignore[attr-defined]
+            else:
+                _sp.run(["xdg-open", str(args.output)])
+        except Exception:
+            pass
     print(f"レポート: {args.output}")
     print(f"要判断: {c['needs_human']}件(全件レポートに画像つきで記載)")
     for t, _a, _r in buckets["needs_human"]:

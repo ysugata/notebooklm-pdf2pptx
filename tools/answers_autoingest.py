@@ -195,7 +195,7 @@ def process(txt: Path, reg: dict[str, dict]) -> None:
     run([PY, str(ROOT / "tools" / "feedback_report.py"), str(tasks),
          str(answers_json)]
         + (["--runs-log", str(runs_log)] if runs_log else [])
-        + ["-o", str(tasks.parent / "report.html")])
+        + ["-o", str(tasks.parent / "report.html"), "--open"])
 
     if needs_reconvert(runs_log):
         meta_p = resolve_dir(entry["work_dir"]) / "convert_meta.json"

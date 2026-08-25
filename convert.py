@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
+import sys
 from pathlib import Path
 
 from notebooklm_pdf2pptx.config import Settings
@@ -70,6 +72,19 @@ def main() -> None:
             ensure_ascii=False), "utf-8")
     converter = Converter(settings)
     report = converter.convert(args.input.resolve(), args.output.resolve())
+
+    # 文字化けの要判断が残っていればレポートを自動生成してブラウザで開く
+    # (回答は必ず人に届ける。残ゼロなら開かない)
+    try:
+        fb = settings.work_dir / "feedback"
+        subprocess.run([sys.executable, str(Path(__file__).parent / "tools" / "garble_prepare.py"),
+                        str(args.output.resolve()), "--work-dir", str(settings.work_dir),
+                        "--out-dir", str(fb)], check=True)
+        subprocess.run([sys.executable, str(Path(__file__).parent / "tools" / "feedback_report.py"),
+                        str(fb / "tasks.json"), "-o", str(fb / "report.html"), "--open"],
+                       check=True)
+    except Exception as exc:
+        print(f"要判断レポートの自動生成に失敗: {exc}")
 
     print("\n=== 完了 ===")
     print(f"出力: {report['output']}")
