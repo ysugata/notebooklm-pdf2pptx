@@ -101,8 +101,9 @@ acquire → ocr → measure → solve → group → remove → compose → qa
   先頭ベースライン = 0.96×フォントサイズ(行高に非依存)。
   さらにヒラギノ→MS PGothic、Futura→Poppins等のフォント置換を行う。
   = spcPts前提のレイアウトはGoogleスライドでは行間が2割開いて崩れる(既知の制約)。
-- **PowerPoint実測則**(2026-08-25、ユーザーのPowerPointエクスポートPDF、13ケース
-  rms 0.29pt): 実効行送り = spcPts値(96dpiピクセルへ量子化、±0.75pt)。
+- **PowerPoint実測則**(2026-08-25、ブラウザ版PowerPointのエクスポートPDF、
+  13ケース rms 0.29pt。デスクトップ版は未実測 — プローブ入手次第検証):
+  実効行送り = spcPts値(96dpiピクセルへ量子化、±0.75pt)。
   **先頭ベースライン = 0.76×行高**(フォント・サイズ完全非依存 —
   メトリクスが大きく違うCalibriとOswaldで同一値)。
   既定1行送りは1.2em・spcPctは%×1.2em(LO/Googleと共通)。
