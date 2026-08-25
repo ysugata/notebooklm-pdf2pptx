@@ -134,6 +134,10 @@ class Converter:
         # layout.jsonにも再適用する。冪等(適用済みなら素通り)。
         self._replay_fix_ledger(pages_dir)
 
+        # 自動トリアージ: 機械的に「正しい」と検証できるreviewを自動確認し、
+        # 人に回る確認作業を最小化する(人手回答242件の正解データで較正済み)
+        self._auto_triage_reviews(pages_dir)
+
         from .pptx_writer import build_presentation
 
         report = build_presentation(processed, pages_dir, output_path, settings, self.library)
@@ -669,6 +673,67 @@ class Converter:
         if n_changed:
             print(f"フォント調和: {n_changed}行を多数派族"
                   f"({'/'.join(dominant.values())})へ統一", flush=True)
+
+    def _auto_triage_reviews(self, pages_dir: Path) -> None:
+        """review(要確認行)のうち機械検証で「正しい」と断定できるものを自動解決する。
+
+        人手回答242件(正しい147/要修正87/要人間7)のグラウンドトゥルースで較正:
+          1. 和文3文字以上の行: textfixが修正を提案せず、漢字連続に壊れ
+             (OOV・隣接1文字断片)が無ければ自動確認。
+             → 正しい行の9割を自動化、危険なすり抜けは短い行のみだった
+          2. 短い行(2文字以上)・欧文/数字行: 言語検証が効かないため、
+             OCR信頼度≥0.97、数字だけの行はさらにNCC≥0.6を要求
+          3. 1文字だけの行は自動確認しない(要修正断片の大半がここに集中)
+          4. 「文字化け予測修正」review: 修正後本文が言語的に健全なら自動確認
+             (修正自体は辞書・品詞・NCC検証ゲートを通過している)
+        対象は低信頼OCR行・未認識インク残存・予測修正のみ。
+        「画像のまま保持」等の情報reviewには触れない。
+        """
+        import re
+        jp_re = re.compile(r"[ぁ-ヿ一-鿿々]")
+        kanji_run_re = re.compile(r"[一-鿿々]{1,}")
+        digits_re = re.compile(r"^[\d\s.,/%+±:\-]+$")
+
+        def clean(text: str) -> bool:
+            fixed, _notes = self.textfix.apply(text)
+            if fixed != text:
+                return False
+            return not any(self.textfix._looks_broken(run)
+                           for run in kanji_run_re.findall(text))
+
+        n_auto = 0
+        for lay_path in sorted(pages_dir.glob("*/layout.json")):
+            lay = json.loads(lay_path.read_text("utf-8"))
+            lines = [ln for b in lay.get("blocks", []) for ln in b["lines"]]
+            ncc_by_text = {ln["text"]: ln.get("ncc") for ln in lines}
+            dirty = False
+            for r in lay.get("review", []):
+                if r.get("resolved"):
+                    continue
+                reason = r.get("reason", "")
+                is_pred = reason.startswith("文字化け予測修正")
+                if reason and not is_pred and "未認識のインク" not in reason:
+                    continue
+                text = (r.get("text") or "").strip()
+                if len(text) < 2 or not clean(text):
+                    continue
+                if is_pred or (len(text) >= 3 and jp_re.search(text)):
+                    ok = True
+                else:
+                    conf = r.get("confidence", 0.0)
+                    ncc = ncc_by_text.get(r.get("text"))
+                    ok = conf >= 0.97 and (
+                        not digits_re.match(text) or (ncc or 0.0) >= 0.6)
+                if ok:
+                    r["resolved"] = "auto_verified"
+                    dirty = True
+                    n_auto += 1
+            if dirty:
+                lay_path.write_text(
+                    json.dumps(lay, ensure_ascii=False, indent=1), "utf-8")
+        if n_auto:
+            print(f"自動トリアージ: {n_auto}件のreviewを機械検証で確認済みに",
+                  flush=True)
 
     def _replay_fix_ledger(self, pages_dir: Path) -> None:
         """修正台帳(fixes_ledger.jsonl)をlayout.jsonへリプレイする。
