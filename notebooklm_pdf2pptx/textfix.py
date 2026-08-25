@@ -84,7 +84,7 @@ VARIANTS: dict[str, str] = {str(k): str(v) for k, v in {
     "對": "対", "帶": "帯", "滯": "滞", "臺": "台", "單": "単", "團": "団",
     "斷": "断", "遲": "遅", "晝": "昼", "廳": "庁", "鐵": "鉄", "轉": "転",
     "傳": "伝", "燈": "灯", "當": "当", "黨": "党", "獨": "独", "讀": "読",
-    "腦": "脳", "廢": "廃", "賣": "売", "發": "発", "變": "変", "邊": "辺",
+    "腦": "脳", "廢": "廃", "綫": "線", "賣": "売", "發": "発", "變": "変", "邊": "辺",
     "辯": "弁", "寶": "宝", "豐": "豊", "滿": "満", "藥": "薬", "餘": "余",
     "譽": "誉", "樣": "様", "來": "来", "亂": "乱", "兩": "両", "禮": "礼",
     "靈": "霊", "勞": "労", "灣": "湾", "齒": "歯", "齡": "齢", "會": "会",
@@ -143,6 +143,8 @@ class TextRepairer:
         # 辞書治癒・品詞棄却)の中で候補に加わるだけなので、誤学習しても
         # 単独では誤修正にならない。フレーズは完全一致のみ。
         learned_pairs, self._phrases = _load_learned()
+        self._glyph = None  # 字形類似インデックス(遅延構築。フォント無し環境ではNone)
+        self._glyph_tried = False
         self._confusable = {k: v for k, v in _CONFUSABLE.items()}
         for a, b in learned_pairs:
             if _KANJI_CHAR.match(a) and _KANJI_CHAR.match(b):
@@ -152,6 +154,22 @@ class TextRepairer:
     @property
     def available(self) -> bool:
         return self._tokenizer is not None
+
+    def _shape_neighbors(self, ch: str) -> str:
+        """フォント描画から機械計算した形近字候補(glyphsim)。"""
+        if not self._glyph_tried:
+            self._glyph_tried = True
+            try:
+                from .fontlib import FontLibrary
+                from .config import Settings
+                from .glyphsim import GlyphIndex
+                face = FontLibrary(
+                    extra_dirs=[Settings().fonts_dir]).face("Noto Sans JP")
+                if face is not None:
+                    self._glyph = GlyphIndex(face.path, face.index)
+            except Exception:
+                self._glyph = None
+        return self._glyph.neighbors(ch) if self._glyph is not None else ""
 
     def _is_single_word(self, run: str) -> bool:
         """runが単一の辞書形態素(非OOV)としてトークン化されるか。"""
@@ -168,7 +186,10 @@ class TextRepairer:
         「1文字断片の連続」だけが誤読の兆候。
         """
         ms = list(self._tokenizer.tokenize(run))
+        # 接尾辞・接頭辞の1文字漢字(的・性・化・約・全 等)は正常な日本語の
+        # 構成要素なので断片とみなさない(人的・効率化 等への誤修正防止)
         is_single = [len(m.surface()) == 1 and bool(_KANJI_CHAR.match(m.surface()))
+                     and m.part_of_speech()[0] not in ("接尾辞", "接頭辞")
                      for m in ms]
         n_oov = sum(1 for m in ms if m.is_oov())
         n_pairs = sum(1 for i in range(len(ms) - 1)
@@ -187,7 +208,7 @@ class TextRepairer:
             return False
         return n_oov > 0 or n_single > 0
 
-    def repair(self, text: str, max_fixes: int = 3) -> tuple[str, list[tuple[str, str]]]:
+    def repair(self, text: str, max_fixes: int = 6) -> tuple[str, list[tuple[str, str]]]:
         """形近字置換で辞書語に修復できる箇所だけを直す。
 
         判定は必ず「行全体」のトークン化品質で行う。孤立した漢字連続だけを
@@ -246,7 +267,9 @@ class TextRepairer:
             for pos, ch in enumerate(result):
                 if pos not in broken_pos or not _KANJI_CHAR.match(ch):
                     continue
-                for cand in self._confusable.get(ch, ""):
+                cands = dict.fromkeys(
+                    self._confusable.get(ch, "") + self._shape_neighbors(ch))
+                for cand in cands:
                     # 修復先は漢字に限定(カタカナ等の形近字は照合用途のみ)
                     if not _KANJI_CHAR.match(cand):
                         continue

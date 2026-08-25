@@ -16,3 +16,4 @@ inbox/
 outbox/
 rules/learned_*.json
 attic/
+rules/shape_index_*.npz
