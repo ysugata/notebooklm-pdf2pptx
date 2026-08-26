@@ -4,7 +4,7 @@ CodexはこのAGENTS.mdを自動で読む(スキル機能は不要)。依頼は3
 
 | 依頼の言葉 | やること |
 |---|---|
-| 「編集できるパワポにして」 | `.venv/bin/python convert.py "<入力>" -o "<入力名>_editable.pptx" --inpaint auto --work-dir "work_<資料名>"`。入力はPDF/画像/ほぼ画像のPPTX。完了後 `tools/smoke_test.py <出力> --pages-dir <work>/pages` で健全性確認 |
+| 「編集できるパワポにして」 | `.venv/bin/python convert.py "<入力>" -o "<入力名>_editable.pptx" --inpaint auto --work-dir "work_<資料名>"`。入力はPDF/画像/ほぼ画像のPPTX。完了後 `tools/smoke_test.py <出力> --pages-dir <work>/pages` で健全性確認。**そのまま続けて「文字化けを直して」の手順を必ず実行する**(依頼者が明示しなくても。変換の依頼には文字化け修正まで含まれる) |
 | 「文字化けを直して」 | ①`tools/garble_prepare.py <出力pptx> --work-dir <work> --out-dir <work>/feedback` でタスク化(自動修正・トリアージも適用される)。②各タスクの crops/<id>_source.png を実際に見て、確信できる修正は answers に fix、有力な読みは `suggestions.json` に `{"id": "推測文言"}`、読めないものは needs_human。③apply→`feedback_report.py --open` でレポートを自動表示(人はレポートの選択式UIで採否を決める。選択パネル式のチャット回答はClaude側の機能で、Codexでは行わない) |
 | 「修正指示を反映して」 | 以下の「修正指示の反映ワークフロー」手順1〜5 |
 
@@ -34,7 +34,10 @@ CodexはこのAGENTS.mdを自動で読む(スキル機能は不要)。依頼は3
 3. 文字化け/修正指示: タスク件数Nを最初に控え、全Nが
    fix / skip / needs_human / suggestions のいずれかに分類済み
 4. レポート(report.html)生成済み、needs_human は全件列挙
-5. **実行しなかった検証があれば、その理由を必ず報告に書く**
+5. **要判断が残る場合は `feedback_report.py --open` で実行し、レポートが
+   ブラウザで開いた状態で終了する**(開かずに終了しない。回答の入口を
+   必ず依頼者の目の前に置く)
+6. **実行しなかった検証があれば、その理由を必ず報告に書く**
 
 # 修正指示の反映ワークフロー
 
